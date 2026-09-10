@@ -15,7 +15,7 @@ Full design: [`implementation_plan_updated3.md`](implementation_plan_updated3.md
 | 2. OCR pipeline | 🟡 built + tested on synthetic pages; needs real answer sheets |
 | 3. Grading + strictness | ✅ MCQ, subjective (hybrid LLM + embeddings), mixed choose-and-justify |
 | 4. Diagrams | ✅ detection, label reading, vision-model judgement, teacher weightage |
-| 5. Knowledge engine | ⏳ |
+| 5. Knowledge engine | ✅ question-paper parsing, AI answer keys, validation, disputes + audit log |
 | 6. React + FastAPI UI | ⏳ |
 | 7. Self-learning | ⏳ |
 | 8. Polish | ⏳ |
@@ -94,6 +94,11 @@ src/grading/subjective_grader.py  LLM judges, embeddings + keywords cross-check
 src/grading/structured_output.py  4-layer JSON defence (schema, tolerant parse, repair, regex)
 src/grading/grading_engine.py  answer key + segmented sheet -> graded paper + review reasons
 src/knowledge/llm_client.py  LiteLLM -> Ollama (think off, 8K ctx) / opt-in cloud
+src/knowledge/question_parser.py  question paper -> questions, marks, options, sub-parts
+src/knowledge/answer_generator.py  AI answer key per question type (flags low confidence)
+src/knowledge/answer_validator.py  check teacher's key (MCQs solved blind, no anchoring)
+src/knowledge/dispute_manager.py  accept / discuss / insist flow for flagged entries
+src/knowledge/dispute_logger.py  SQLite audit trail, search, CSV export
 demo/run_demo.py           end-to-end: sheet image -> OCR -> grading report
 setup_env.py               Phase 1 setup + verification
 env.ps1                    shell environment (caches on this drive)

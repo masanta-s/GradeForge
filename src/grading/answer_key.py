@@ -39,6 +39,8 @@ class Question:
     option_marks: float = 0.0                              # mixed: marks for choosing correctly
     diagram: DiagramSpec | None = None                     # optional drawn part (Phase 4)
     source: AnswerSource = "teacher"
+    ai_confidence: float | None = None                     # model's self-reported confidence, if AI-made
+    explanation: str = ""                                  # why this is the answer (shown to the teacher)
 
     @property
     def has_options(self) -> bool:
