@@ -93,6 +93,7 @@ class SubjectiveResult:
     method: Literal["embedding", "hybrid", "empty"]
     needs_review: bool
     missing_points: list[str] = field(default_factory=list)
+    review_reason: str = ""   # plain-language "what to check", shown to the teacher
 
 
 def round_marks(value: float, max_marks: float, step: float = MARK_STEP) -> float:
@@ -102,8 +103,8 @@ def round_marks(value: float, max_marks: float, step: float = MARK_STEP) -> floa
 def build_messages(question: Question, answer: str, examples: Sequence[GradedExample] = ()) -> list[dict]:
     parts = [f"Question ({question.max_marks:g} marks): {question.text}",
              f"Model answer: {question.model_answer}"]
-    if question.keywords:
-        parts.append("Key points: " + "; ".join(question.keywords))
+    if points := question.key_points or question.keywords:
+        parts.append("Key points: " + "; ".join(points))
     if examples:
         parts.append("How this teacher graded similar answers:")
         parts += [f"- Answer: {ex.answer}\n  Teacher's marks: {ex.marks:g}/{ex.max_marks:g}"
@@ -145,15 +146,20 @@ class SubjectiveGrader:
         if question.keywords:
             return list(question.keywords)
         if question.id not in self._keyword_cache:
-            extractor = self._keyword_extractor
-            if extractor is None:
-                from keybert import KeyBERT
+            try:
+                extractor = self._keyword_extractor
+                if extractor is None:
+                    from keybert import KeyBERT
 
-                extractor = self._keyword_extractor = KeyBERT(model=self.embedder)
-            found = extractor.extract_keywords(
-                question.model_answer, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=5
-            )
-            self._keyword_cache[question.id] = [kw for kw, _ in found]
+                    extractor = self._keyword_extractor = KeyBERT(model=self.embedder)
+                found = extractor.extract_keywords(
+                    question.model_answer, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=5
+                )
+                self._keyword_cache[question.id] = [kw for kw, _ in found]
+            except Exception:
+                # Keywords are only a cross-check: without them, grading falls back to semantic
+                # similarity (plus the LLM) rather than failing the whole paper.
+                self._keyword_cache[question.id] = []
         return self._keyword_cache[question.id]
 
     def local_features(self, question: Question, answer: str) -> tuple[float, float | None, list[str], list[str]]:
@@ -209,15 +215,25 @@ class SubjectiveGrader:
         else:
             quality, method = llm_quality, "hybrid"
 
-        needs_review = (
-            (llm is not None and llm_quality is None)
-            or not reliable
-            or (llm_quality is not None and abs(llm_quality - local) > DISAGREEMENT)
-        )
+        review_reason = ""
+        if llm is not None and llm_quality is None:
+            review_reason = "the AI grader gave no usable answer, so this was scored by similarity only"
+        elif not reliable:
+            review_reason = "the AI's reply was malformed and had to be repaired"
+        elif llm_quality is not None and abs(llm_quality - local) > DISAGREEMENT:
+            if llm_quality > local and missing:
+                review_reason = (f"the AI gave {llm_quality:.0%} credit but key terms are missing: "
+                                 + ", ".join(missing))
+            elif llm_quality > local:
+                review_reason = f"the AI gave {llm_quality:.0%} credit but the answer is worded far from the model answer"
+            else:
+                review_reason = f"the AI gave only {llm_quality:.0%} credit although the answer uses the expected terms"
+        needs_review = bool(review_reason)
         marks = round_marks(question.max_marks * apply_strictness(quality, strictness), question.max_marks)
         return SubjectiveResult(
             question_id=question.id, marks=marks, max_marks=question.max_marks, quality=quality,
             local_quality=local, semantic=semantic, keyword_coverage=coverage, matched_keywords=matched,
             missing_keywords=missing, llm_quality=llm_quality, feedback=feedback.strip(),
             method=method, needs_review=needs_review, missing_points=missing_points,
+            review_reason=review_reason,
         )

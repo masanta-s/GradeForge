@@ -33,7 +33,8 @@ class Question:
     qtype: QuestionType
     max_marks: float
     model_answer: str = ""
-    keywords: list[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)      # 1-3 word terms for the local cross-check
+    key_points: list[str] = field(default_factory=list)    # phrases telling the LLM what earns marks
     options: dict[str, str] = field(default_factory=dict)  # MCQ: {"A": "Mitochondria", ...}
     correct_option: str | None = None                      # MCQ: "B"
     option_marks: float = 0.0                              # mixed: marks for choosing correctly
@@ -120,14 +121,20 @@ class AnswerKey:
         path.write_text(json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")
 
     @classmethod
-    def load(cls, path: Path) -> AnswerKey:
-        data = json.loads(path.read_text(encoding="utf-8"))
+    def from_dict(cls, data: dict) -> AnswerKey:
+        """Build without validating — drafts under review may still be incomplete."""
+        data = dict(data)
         questions = []
         for q in data.pop("questions"):
+            q = dict(q)
             if q.get("diagram"):
                 q["diagram"] = DiagramSpec(**q["diagram"])
             questions.append(Question(**q))
-        key = cls(questions=questions, **data)
-        if problems := key.validate():
+        return cls(questions=questions, **data)
+
+    @classmethod
+    def load(cls, path: Path, validate: bool = True) -> AnswerKey:
+        key = cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        if validate and (problems := key.validate()):
             raise ValueError(f"invalid answer key {path.name}: " + "; ".join(problems))
         return key

@@ -103,6 +103,7 @@ def test_large_disagreement_is_flagged(grader):
     llm = ScriptedLLM(json.dumps({"quality": 1.0, "feedback": "Perfect.", "missing_points": []}))
     result = grader.grade(QUESTION, "Photosynthesis is what photosynthesis is.", strictness=50, llm=llm)
     assert result.needs_review
+    assert result.review_reason.startswith("the AI gave 100% credit but key terms are missing: sunlight")
 
 
 def test_unparseable_llm_falls_back_to_embedding_and_flags(grader):
@@ -132,6 +133,17 @@ def test_keywords_extracted_when_teacher_gave_none(grader):
     question = Question(**{**QUESTION.__dict__, "keywords": [], "id": "9"})
     result = grader.grade(question, "It makes glucose.", strictness=50)
     assert result.matched_keywords == ["glucose"] and result.missing_keywords == ["oxygen"]
+
+
+def test_keyword_extraction_failure_degrades_instead_of_crashing(grader):
+    class BrokenKeyBERT:
+        def extract_keywords(self, doc, **kwargs):
+            raise OSError("model not available offline")
+
+    grader._keyword_extractor = BrokenKeyBERT()
+    question = Question(**{**QUESTION.__dict__, "keywords": [], "id": "10"})
+    result = grader.grade(question, "Plants make glucose.", strictness=50)
+    assert result.keyword_coverage is None and result.method == "embedding"
 
 
 @pytest.mark.parametrize(("value", "expected"), [(2.24, 2.0), (2.26, 2.5), (-1, 0.0), (9, 4.0)])

@@ -18,8 +18,6 @@ from src.grading.structured_output import CompletionFn
 from src.grading.subjective_grader import GradedExample, SubjectiveGrader, SubjectiveResult
 from src.ocr.answer_segmenter import SegmentationResult
 
-_UNCERTAIN = "AI grade uncertain (model disagreement or unreliable output)"
-
 
 def _mcq_reasons(result: MCQResult) -> list[str]:
     return {
@@ -139,7 +137,7 @@ class GradingEngine:
 
         written = replace(question, max_marks=question.written_marks)
         result = self.subjective.grade(written, answer, self.strictness, llm=self.llm, examples=examples or [])
-        reasons = [_UNCERTAIN] if result.needs_review else []
+        reasons = [f"Check: {result.review_reason}"] if result.needs_review else []
         return QuestionGrade(question.id, question.qtype, result.marks, question.max_marks, answer, "graded",
                              feedback=result.feedback, review_reasons=reasons, detail=result)
 
@@ -159,7 +157,7 @@ class GradingEngine:
 
         reasons = _mcq_reasons(choice) if option_part else ["could not find which option was chosen"]
         if justified.needs_review:
-            reasons.append(_UNCERTAIN)
+            reasons.append(f"Check the justification: {justified.review_reason}")
         if not choice.correct and justified.marks > 0:
             reasons.append("wrong option, but the justification earned marks: check your board's rule")
         feedback = f"{_option_feedback(question, choice)} {justified.feedback}".strip()

@@ -34,26 +34,37 @@ SCHEMAS = {
         "correct_option": {"type": "string"}, "explanation": {"type": "string"}, "confidence": _CONFIDENCE}},
     "mixed": {"type": "object", "required": ["correct_option", "model_answer", "key_points", "confidence"],
               "properties": {"correct_option": {"type": "string"}, "model_answer": {"type": "string"},
-                             "key_points": _POINTS, "confidence": _CONFIDENCE}},
+                             "key_points": _POINTS, "keywords": _POINTS, "confidence": _CONFIDENCE}},
     "written": {"type": "object", "required": ["model_answer", "key_points", "confidence"], "properties": {
-        "model_answer": {"type": "string"}, "key_points": _POINTS, "suggested_marks": _MARKS,
-        "confidence": _CONFIDENCE}},
+        "model_answer": {"type": "string"}, "key_points": _POINTS, "keywords": _POINTS,
+        "suggested_marks": _MARKS, "confidence": _CONFIDENCE}},
     "diagram": {"type": "object", "required": ["description", "required_labels", "confidence"], "properties": {
         "description": {"type": "string"}, "required_labels": _POINTS, "diagram_marks": _MARKS,
-        "model_answer": {"type": "string"}, "key_points": _POINTS, "suggested_marks": _MARKS,
-        "confidence": _CONFIDENCE}},
+        "model_answer": {"type": "string"}, "key_points": _POINTS, "keywords": _POINTS,
+        "suggested_marks": _MARKS, "confidence": _CONFIDENCE}},
 }
 
+# Key points (phrases) guide the LLM grader; keywords (single technical terms) feed the local
+# typo-tolerant cross-check, which can't match whole phrases against a student's own wording.
+_KEYWORDS = ("keywords: 2-6 essential technical terms of 1-3 words each that a correct answer must "
+             "contain (e.g. 'chlorophyll', 'semi-permeable membrane').")
 INSTRUCTIONS = {
     "mcq": "Choose the single correct option. Give its letter in correct_option and a one-line explanation.",
     "mixed": ("Choose the correct option (letter in correct_option), then write the model justification a "
-              "student should give (model_answer) and its key points."),
-    "written": ("Write the model answer a full-marks student would give for {marks} marks, and list its key "
-                "points (short phrases a marker looks for)."),
+              "student should give (model_answer), its key points (short phrases a marker looks for), and "
+              + _KEYWORDS),
+    "written": ("Write the model answer a full-marks student would give for {marks} marks, its key points "
+                "(short phrases a marker looks for), and " + _KEYWORDS),
     "diagram": ("Describe what a correct drawing shows (description), list the labels it must have "
                 "(required_labels), and say how many of the {marks} marks are for the drawing (diagram_marks). "
-                "If the question also asks for writing, give model_answer and key_points for that part."),
+                "If the question also asks for writing, give model_answer, key_points and " + _KEYWORDS),
 }
+
+
+def _terms(data: dict) -> tuple[list[str], list[str]]:
+    points = [str(p) for p in data.get("key_points", []) if str(p).strip()]
+    keywords = [str(k) for k in data.get("keywords", []) if str(k).strip() and len(str(k).split()) <= 3]
+    return points, keywords
 
 
 def _schema_kind(pq: ParsedQuestion) -> str:
@@ -94,11 +105,11 @@ def generate_question(pq: ParsedQuestion, llm: CompletionFn, subject: str, exam:
         question.explanation = str(data.get("explanation", ""))
         if kind == "mixed":
             question.model_answer = str(data.get("model_answer", ""))
-            question.keywords = [str(p) for p in data.get("key_points", [])]
+            question.key_points, question.keywords = _terms(data)
             question.option_marks = 1.0 if marks > 1 else marks / 2
     elif kind == "written":
         question.model_answer = str(data.get("model_answer", ""))
-        question.keywords = [str(p) for p in data.get("key_points", [])]
+        question.key_points, question.keywords = _terms(data)
         if pq.marks is None and data.get("suggested_marks"):
             question.max_marks = float(data["suggested_marks"])
     else:  # diagram
@@ -111,7 +122,7 @@ def generate_question(pq: ParsedQuestion, llm: CompletionFn, subject: str, exam:
         )
         if diagram_marks < marks:
             question.model_answer = str(data.get("model_answer", ""))
-            question.keywords = [str(p) for p in data.get("key_points", [])]
+            question.key_points, question.keywords = _terms(data)
     return question
 
 
