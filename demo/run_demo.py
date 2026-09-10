@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from src import config
+from src.diagram.weightage import DiagramSpec
 from src.grading.answer_key import AnswerKey, Question
 
 HANDWRITING_FONT = r"C:\Windows\Fonts\segoepr.ttf"
@@ -46,6 +47,11 @@ SAMPLE_KEY = AnswerKey(
                  model_answer="Mitochondria carry out aerobic respiration, which releases energy from "
                               "glucose in the form of ATP.",
                  keywords=["respiration", "glucose", "ATP"]),
+        Question(id="6", text="Draw a neat labelled diagram of an animal cell.", qtype="short", max_marks=4,
+                 diagram=DiagramSpec(marks=4, required_labels=["Nucleus", "Cell membrane", "Mitochondria",
+                                                               "Cytoplasm"],
+                                     description="An animal cell showing the cell membrane, nucleus, "
+                                                 "mitochondria and cytoplasm.")),
     ],
 )
 
@@ -59,21 +65,42 @@ SAMPLE_SHEET = [
     "Q4. Respiration",
     "Q5. B because respiration in mitochondria",
     "breaks down glucose to release energy.",
+    "Q6. Diagram of an animal cell:",
 ]
+SAMPLE_CELL_LABELS = ["Nucleus", "Cell membrane", "Mitochondria"]  # student forgot "Cytoplasm"
+
+
+def _font(size: int):
+    try:
+        return ImageFont.truetype(HANDWRITING_FONT, size)
+    except OSError:
+        return ImageFont.load_default(size=size)
+
+
+def _draw_cell(draw: ImageDraw.ImageDraw, top: int) -> None:
+    """A labelled animal cell like a student's sketch: membrane, nucleus, two mitochondria."""
+    draw.ellipse((220, top, 900, top + 560), outline=25, width=6)
+    draw.ellipse((480, top + 190, 640, top + 330), outline=25, width=5)
+    draw.ellipse((300, top + 120, 400, top + 180), outline=25, width=4)
+    draw.ellipse((700, top + 380, 810, top + 440), outline=25, width=4)
+    anchors = [(640, top + 260), (890, top + 300), (400, top + 150)]
+    for i, (label, anchor) in enumerate(zip(SAMPLE_CELL_LABELS, anchors)):
+        y = top + 70 + i * 150
+        draw.line([anchor, (1080, y)], fill=25, width=3)
+        draw.text((1100, y + 14), label, font=_font(36), fill=30, anchor="ls")
 
 
 def render_sample_sheet(path: Path) -> Path:
-    try:
-        font = ImageFont.truetype(HANDWRITING_FONT, 44)
-    except OSError:
-        font = ImageFont.load_default(size=44)
-    width, spacing = 1700, 88
-    page = Image.new("L", (width, 160 + spacing * (len(SAMPLE_SHEET) + 2)), 246)
+    font = _font(44)
+    width, spacing, drawing_height = 1700, 88, 660
+    text_height = 160 + spacing * (len(SAMPLE_SHEET) + 1)
+    page = Image.new("L", (width, text_height + drawing_height), 246)
     draw = ImageDraw.Draw(page)
     for y in range(120, page.height - 40, spacing):
         draw.line([(40, y), (width - 40, y)], fill=175, width=2)
     for i, text in enumerate(SAMPLE_SHEET):
         draw.text((140, 120 + (i + 1) * spacing - 18), text, font=font, fill=30, anchor="ls")
+    _draw_cell(draw, top=text_height - 40)
     image = np.array(page, dtype=np.float32) * np.linspace(0.7, 1.0, width, dtype=np.float32)[None, :]
     h, w = image.shape
     image = cv2.warpAffine(np.clip(image, 0, 255).astype(np.uint8),
@@ -105,6 +132,8 @@ def main() -> None:
         for line in page.lines:
             flag = "  <- low confidence" if line.needs_review else ""
             print(f"  [{line.confidence:.2f}] {line.text}{flag}")
+        for diagram in page.diagrams:
+            print(f"  [diagram] at {diagram.bbox}, detection confidence {diagram.confidence:.2f}")
 
     segmentation = segment_answers(pages, SAMPLE_KEY.question_ids)
     llm = None
@@ -120,6 +149,9 @@ def main() -> None:
           f"{'LLM ' + config.DEFAULT_LLM if llm else 'embeddings only'}) --")
     for q in paper.questions:
         print(f"Q{q.question_id} [{q.qtype}] {q.marks:g}/{q.max_marks:g}  answer: {q.answer_text!r}")
+        if q.diagram:
+            print(f"     diagram {q.diagram.marks:g}/{q.diagram.max_marks:g}: labels {q.diagram.matched_labels}, "
+                  f"missing {q.diagram.missing_labels}")
         if q.feedback:
             print(f"     feedback: {q.feedback}")
         for reason in q.review_reasons:

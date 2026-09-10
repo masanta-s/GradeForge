@@ -5,7 +5,7 @@ PyMuPDF instead of TrOCR, which is a handwriting model. Scanned PDFs are rendere
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -39,6 +39,7 @@ class PageOCR:
     source: Literal["handwriting", "pdf_text"]
     skew_angle: float = 0.0
     lines: list[OCRLine] = field(default_factory=list)
+    diagrams: list = field(default_factory=list)  # list[DiagramRegion]
 
     @property
     def text(self) -> str:
@@ -58,8 +59,9 @@ def load_image(path: Path) -> np.ndarray:
 
 
 class OCRPipeline:
-    def __init__(self, extractor=None):
+    def __init__(self, extractor=None, detect_diagrams: bool = True):
         self._extractor = extractor
+        self.detect_diagrams = detect_diagrams
 
     @property
     def extractor(self):
@@ -70,8 +72,13 @@ class OCRPipeline:
         return self._extractor
 
     def run_image(self, image: np.ndarray, page_index: int = 0) -> PageOCR:
+        from src.diagram.detector import detect_diagrams, mask_out
+
         page = preprocess_page(image)
-        regions = extract_lines(page)
+        diagrams = detect_diagrams(page, page_index) if self.detect_diagrams else []
+        # Drawings are blanked out so their strokes and labels aren't read as text lines.
+        text_page = replace(page, ink=mask_out(page.ink, diagrams)) if diagrams else page
+        regions = extract_lines(text_page)
         readings = self.extractor.read_lines([r.image for r in regions]) if regions else []
         return PageOCR(
             page_index=page_index,
@@ -81,6 +88,7 @@ class OCRPipeline:
                 OCRLine(text=rd.text, confidence=rd.confidence, bbox=rg.bbox, page=page_index, crop=rg.image)
                 for rg, rd in zip(regions, readings)
             ],
+            diagrams=diagrams,
         )
 
     def run_file(self, path: str | Path) -> list[PageOCR]:

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).resolve().parent.parent / "src"
-AIR_GAPPED_PACKAGES = ["ocr", "grading"]
+AIR_GAPPED_PACKAGES = ["ocr", "grading", "diagram"]
 NETWORK_MODULES = {
     "requests", "httpx", "urllib", "urllib3", "http", "socket", "aiohttp",
     "litellm", "ollama", "huggingface_hub",

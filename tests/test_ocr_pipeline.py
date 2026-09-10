@@ -79,6 +79,33 @@ def test_scanned_pdf_is_rendered_and_ocrd(tmp_path):
     assert len(pages[0].lines) == len(SAMPLE_LINES)
 
 
+def test_diagrams_are_separated_and_attached_to_their_question():
+    from src.ocr.answer_segmenter import segment_answers
+    from tests.conftest import make_diagram_page
+
+    class ScriptExtractor:
+        def read_lines(self, images):
+            texts = ["Q3. Draw a labelled diagram of an animal cell", "The cell is shown below.",
+                     "Q4. The nucleus controls the cell."]
+            assert len(images) == len(texts)  # labels inside the drawing are NOT text lines
+            return [LineReading(t, 0.95, 0.9) for t in texts]
+
+    image, _ = make_diagram_page(kind="cell")
+    page = OCRPipeline(ScriptExtractor()).run_image(image)
+    assert len(page.diagrams) == 1
+    result = segment_answers([page], ["3", "4"])
+    assert len(result.answers["3"].diagrams) == 1 and result.answers["4"].diagrams == []
+    assert result.answers["3"].text == "Draw a labelled diagram of an animal cell\nThe cell is shown below."
+
+
+def test_diagram_detection_can_be_disabled():
+    from tests.conftest import make_diagram_page
+
+    image, _ = make_diagram_page(kind="cell")
+    page = OCRPipeline(FakeExtractor(), detect_diagrams=False).run_image(image)
+    assert page.diagrams == []
+
+
 def test_unsupported_file_type(tmp_path):
     path = tmp_path / "notes.docx"
     path.write_bytes(b"x")

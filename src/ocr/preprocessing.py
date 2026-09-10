@@ -25,9 +25,13 @@ class LineRegion:
 
 @dataclass(frozen=True)
 class PreprocessedPage:
-    gray: np.ndarray      # illumination-flattened, deskewed grayscale page
-    ink: np.ndarray       # uint8 mask, 255 = handwriting ink (ruled lines removed)
+    gray: np.ndarray      # illumination-flattened, deskewed; ruled lines whitened (what TrOCR reads)
+    ink: np.ndarray       # uint8 mask, 255 = ink; any long straight line removed (text segmentation)
     skew_angle: float     # degrees the page was rotated by to straighten it
+    # Drawings keep their own long straight edges (box sides, graph axes), which the aggressive
+    # rule removal above would erase: only page-spanning rules are removed here.
+    original: np.ndarray | None = None      # deskewed grayscale, nothing whitened (diagram crops)
+    drawing_ink: np.ndarray | None = None   # ink mask with only page-wide rules removed
 
 
 def to_grayscale(image: np.ndarray) -> np.ndarray:
@@ -56,16 +60,36 @@ def ink_mask(gray: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
 
 
-def ruled_lines(mask: np.ndarray) -> np.ndarray:
-    """Mask of long horizontal (ruled paper) and vertical (margin) lines in an ink mask."""
+def ruled_lines(mask: np.ndarray, min_fraction: float = 1 / 12, bridge: int = 0) -> np.ndarray:
+    """Mask of horizontal/vertical straight lines at least `min_fraction` of the page long.
+
+    1/12 catches broken or faint ruled lines (and also a drawing's long edges); 1/2 catches only
+    page-spanning rules and margins. `bridge` first closes gaps of up to that many pixels along
+    each direction, so a faint rule that thresholding broke into fragments still counts as one.
+    """
     h, w = mask.shape
+    along_x, along_y = mask, mask
+    if bridge:
+        along_x = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (bridge, 1)))
+        along_y = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, bridge)))
     horizontal = cv2.morphologyEx(
-        mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (max(40, w // 12), 1))
+        along_x, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (max(40, int(w * min_fraction)), 1))
     )
     vertical = cv2.morphologyEx(
-        mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(40, h // 12)))
+        along_y, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(40, int(h * min_fraction))))
     )
     return cv2.dilate(cv2.bitwise_or(horizontal, vertical), np.ones((3, 3), np.uint8))
+
+
+def extend_full_span(rules: np.ndarray, min_share: float = 0.25) -> np.ndarray:
+    """Ruled lines span the whole page, so any row (column) where a detected rule covers at
+    least `min_share` of the width (height) is ruled edge to edge. This also catches rule
+    fragments that thresholding cut off next to thick drawing strokes."""
+    h, w = rules.shape
+    full = rules.copy()
+    full[(rules > 0).sum(axis=1) >= min_share * w, :] = 255
+    full[:, (rules > 0).sum(axis=0) >= min_share * h] = 255
+    return full
 
 
 def drop_page_edges(mask: np.ndarray) -> np.ndarray:
@@ -122,12 +146,16 @@ def preprocess_page(image: np.ndarray, deskew: bool = True) -> PreprocessedPage:
     angle = estimate_skew(ink_mask(gray)) if deskew else 0.0
     if angle:
         gray = _rotate(gray, angle, 255)  # flattened paper is ~255, so no artificial edge
-    mask = ink_mask(gray)
-    rules = ruled_lines(mask)
+    raw = ink_mask(gray)
+    # 50% share: a broken ruled line is still mostly detected, but a diagram's box edge (well
+    # under half the width) must not wipe its whole row.
+    rules = extend_full_span(ruled_lines(raw), min_share=0.5)
+    page_rules = extend_full_span(ruled_lines(raw, min_fraction=0.5, bridge=max(9, min(raw.shape) // 100)))
     # Remove rules from both the mask (segmentation) and the grayscale image (what TrOCR reads).
-    mask = drop_page_edges(cv2.bitwise_and(mask, cv2.bitwise_not(rules)))
-    gray = np.where(rules > 0, 255, gray).astype(np.uint8)
-    return PreprocessedPage(gray=gray, ink=mask, skew_angle=angle)
+    mask = drop_page_edges(cv2.bitwise_and(raw, cv2.bitwise_not(rules)))
+    drawing_ink = drop_page_edges(cv2.bitwise_and(raw, cv2.bitwise_not(page_rules)))
+    whitened = np.where(rules > 0, 255, gray).astype(np.uint8)
+    return PreprocessedPage(gray=whitened, ink=mask, skew_angle=angle, original=gray, drawing_ink=drawing_ink)
 
 
 def _runs(active: np.ndarray) -> list[tuple[int, int]]:
@@ -150,6 +178,32 @@ def _split_tall(band: tuple[int, int], profile: np.ndarray, typical: float) -> l
     return _split_tall((start, cut), profile, typical) + _split_tall((cut, end), profile, typical)
 
 
+def line_pitch(profile: np.ndarray, min_lag: int = 12) -> float | None:
+    """Distance between consecutive text lines, from the autocorrelation of the row profile.
+
+    Works even when every line touches its neighbours (one merged ink band), where band heights
+    say nothing about line height.
+    """
+    x = profile - profile.mean()
+    n = len(x)
+    if n < 3 * min_lag or not x.any():
+        return None
+    spectrum = np.fft.rfft(x, 2 * n)
+    ac = np.fft.irfft(spectrum * np.conj(spectrum))[:n]
+    ac = ac / ac[0]
+    window = ac[min_lag:n // 2]
+    if window.size < 3:
+        return None
+    peaks = [i for i in range(1, window.size - 1) if window[i] >= window[i - 1] and window[i] > window[i + 1]]
+    if not peaks:
+        return None
+    best = max(window[i] for i in peaks)
+    if best < 0.15:  # no periodic line structure
+        return None
+    first = next(i for i in peaks if window[i] >= 0.7 * best)  # the fundamental, not a harmonic
+    return float(first + min_lag)
+
+
 def segment_lines(mask: np.ndarray, min_height: int = 8) -> list[tuple[int, int]]:
     """Vertical [y0, y1) extents of text lines in an ink mask.
 
@@ -166,14 +220,15 @@ def segment_lines(mask: np.ndarray, min_height: int = 8) -> list[tuple[int, int]
     p90 = np.percentile(smooth[smooth > 0], 90)
 
     candidates = [b for b in _runs(smooth > max(1.0, 0.02 * p90)) if b[1] - b[0] >= 3]
-    cores = [b for b in _runs(smooth > 0.08 * p90) if b[1] - b[0] >= 3]
-    if not candidates or not cores:
+    if not candidates:
         return []
 
-    # Typical line height from the candidates. If lines touch so much that they merged into a
-    # few giant runs, fall back to the dense cores (x-height), roughly half a full line.
-    typical = min(float(np.median([e - s for s, e in candidates])),
-                  2.0 * float(np.median([e - s for s, e in cores])))
+    # Typical line height from the candidates, capped by the line pitch: when lines touch so
+    # much that they merge into a few giant runs, the pitch still gives the real line height.
+    typical = float(np.median([e - s for s, e in candidates]))
+    pitch = line_pitch(smooth)
+    if pitch is not None:
+        typical = min(typical, pitch)
 
     # Merge candidates separated by tiny gaps (i-dots, accents, broken strokes).
     merged = [candidates[0]]

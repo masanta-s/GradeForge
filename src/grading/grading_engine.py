@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from src.diagram.detector import DiagramRegion
+from src.diagram.evaluator import DiagramEvaluator, DiagramScore
 from src.grading.answer_key import AnswerKey, Question
 from src.grading.mcq_grader import MCQResult, grade_mcq, split_mixed_answer
 from src.grading.structured_output import CompletionFn
@@ -49,6 +51,7 @@ class QuestionGrade:
     feedback: str = ""
     review_reasons: list[str] = field(default_factory=list)
     detail: MCQResult | SubjectiveResult | MixedResult | None = None
+    diagram: DiagramScore | None = None
 
     @property
     def needs_review(self) -> bool:
@@ -85,19 +88,45 @@ class GradingEngine:
         answer_key: AnswerKey,
         *,
         subjective_grader: SubjectiveGrader | None = None,
+        diagram_evaluator: DiagramEvaluator | None = None,
         llm: CompletionFn | None = None,
         strictness: float = 50,
     ):
         self.answer_key = answer_key
         self.subjective = subjective_grader or SubjectiveGrader()
+        self._diagram_evaluator = diagram_evaluator
         self.llm = llm
         self.strictness = strictness
 
+    @property
+    def diagram_evaluator(self) -> DiagramEvaluator:
+        if self._diagram_evaluator is None:
+            self._diagram_evaluator = DiagramEvaluator(vlm=self.llm)
+        return self._diagram_evaluator
+
     def grade_question(self, question: Question, answer: str,
-                       examples: list[GradedExample] | None = None) -> QuestionGrade:
-        if not answer.strip():
+                       examples: list[GradedExample] | None = None,
+                       diagrams: list[DiagramRegion] | None = None) -> QuestionGrade:
+        diagrams = diagrams or []
+        if not answer.strip() and not diagrams:
             return QuestionGrade(question.id, question.qtype, 0.0, question.max_marks, "", "not_attempted",
                                  feedback="Not attempted.")
+        grade = self._grade_text(question, answer, examples)
+        if question.diagram is not None:
+            score = self.diagram_evaluator.evaluate(question.text, question.diagram, diagrams, self.strictness)
+            grade.marks += score.marks
+            grade.diagram = score
+            grade.review_reasons += score.review_reasons
+            grade.feedback = f"{grade.feedback} Diagram: {score.feedback}".strip()
+        grade.max_marks = question.max_marks
+        return grade
+
+    def _grade_text(self, question: Question, answer: str,
+                    examples: list[GradedExample] | None) -> QuestionGrade:
+        """The option and/or written part. A diagram-only question has none (0 of 0 marks)."""
+        if not answer.strip():
+            return QuestionGrade(question.id, question.qtype, 0.0, question.max_marks - question.diagram_marks,
+                                 "", "graded", feedback="No written answer." if question.has_written_part else "")
         if question.qtype == "mcq":
             result = grade_mcq(question, answer)
             return QuestionGrade(question.id, question.qtype, result.marks, question.max_marks, answer, "graded",
@@ -105,8 +134,11 @@ class GradingEngine:
                                  detail=result)
         if question.qtype == "mixed":
             return self._grade_mixed(question, answer, examples)
+        if not question.has_written_part:
+            return QuestionGrade(question.id, question.qtype, 0.0, 0.0, answer, "graded")
 
-        result = self.subjective.grade(question, answer, self.strictness, llm=self.llm, examples=examples or [])
+        written = replace(question, max_marks=question.written_marks)
+        result = self.subjective.grade(written, answer, self.strictness, llm=self.llm, examples=examples or [])
         reasons = [_UNCERTAIN] if result.needs_review else []
         return QuestionGrade(question.id, question.qtype, result.marks, question.max_marks, answer, "graded",
                              feedback=result.feedback, review_reasons=reasons, detail=result)
@@ -135,16 +167,20 @@ class GradingEngine:
                              answer, "graded", feedback=feedback, review_reasons=reasons,
                              detail=MixedResult(choice, justified))
 
-    def grade_answers(self, answers: dict[str, str]) -> PaperGrade:
+    def grade_answers(self, answers: dict[str, str],
+                      diagrams: dict[str, list[DiagramRegion]] | None = None) -> PaperGrade:
+        diagrams = diagrams or {}
         return PaperGrade(
             exam_name=self.answer_key.exam_name,
             strictness=self.strictness,
-            questions=[self.grade_question(q, answers.get(q.id, "")) for q in self.answer_key.questions],
+            questions=[self.grade_question(q, answers.get(q.id, ""), diagrams=diagrams.get(q.id))
+                       for q in self.answer_key.questions],
         )
 
     def grade_segmentation(self, segmentation: SegmentationResult) -> PaperGrade:
         answers = {qid: seg.text for qid, seg in segmentation.answers.items()}
-        paper = self.grade_answers(answers)
+        diagrams = {qid: seg.diagrams for qid, seg in segmentation.answers.items() if seg.diagrams}
+        paper = self.grade_answers(answers, diagrams)
         unplaced = "\n".join(line.text for line in segmentation.unassigned if line.text.strip())
         paper.unplaced_text = unplaced
 

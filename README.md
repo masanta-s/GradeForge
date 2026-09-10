@@ -14,7 +14,7 @@ Full design: [`implementation_plan_updated3.md`](implementation_plan_updated3.md
 | 1. Setup & environment | ✅ |
 | 2. OCR pipeline | 🟡 built + tested on synthetic pages; needs real answer sheets |
 | 3. Grading + strictness | ✅ MCQ, subjective (hybrid LLM + embeddings), mixed choose-and-justify |
-| 4. Diagrams | ⏳ |
+| 4. Diagrams | ✅ detection, label reading, vision-model judgement, teacher weightage |
 | 5. Knowledge engine | ⏳ |
 | 6. React + FastAPI UI | ⏳ |
 | 7. Self-learning | ⏳ |
@@ -83,7 +83,11 @@ src/ocr/preprocessing.py   illumination, deskew, ruled-line/page-edge removal, l
 src/ocr/text_extractor.py  TrOCR line reading with per-line confidence
 src/ocr/pipeline.py        image/PDF -> pages -> lines (digital PDFs use their text layer)
 src/ocr/answer_segmenter.py  map lines to question numbers (Q3 / Ans 3 / 3(b) ...)
-src/grading/answer_key.py  questions: mcq | short | descriptive | mixed (choose + justify)
+src/diagram/detector.py    find drawings (tall + sparse strokes), keep them out of text lines
+src/diagram/label_extractor.py  read label words inside a drawing with TrOCR
+src/diagram/evaluator.py   labels + vision-model structure/completeness (SSIM only as fallback)
+src/diagram/weightage.py   teacher's diagram marks, required labels, weights
+src/grading/answer_key.py  questions: mcq | short | descriptive | mixed (choose + justify), + optional diagram
 src/grading/strictness_curve.py  0-100 slider -> marks curve, similarity rescaling
 src/grading/mcq_grader.py  option detection ("(b)", "Option B", option text, 8->B ...)
 src/grading/subjective_grader.py  LLM judges, embeddings + keywords cross-check
@@ -105,8 +109,8 @@ python -m demo.run_demo
 ```
 
 Renders a sample answer sheet (handwriting-style font, ruled, tilted, uneven light), runs OCR,
-maps lines to questions, and grades MCQ, written and choose-and-justify answers with
-`qwen3.5:9b`. Use `--sheet photo.jpg` for your own sheet, `--strictness 0-100`, or `--no-llm`.
+maps lines and drawings to questions, and grades MCQ, written, choose-and-justify and
+labelled-diagram answers with `qwen3.5:9b`. Use `--sheet photo.jpg` for your own sheet, `--strictness 0-100`, or `--no-llm`.
 
 ## Tests
 

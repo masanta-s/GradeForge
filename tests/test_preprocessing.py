@@ -55,6 +55,15 @@ def test_short_lines_get_full_height_crops(page_factory):
     assert min(heights) >= 0.7 * max(heights), heights
 
 
+def test_ruled_tight_page_lines_are_not_sliced_by_removed_rules(page_factory):
+    # Rule removal cuts a thin empty band through letters that cross a rule. Those gaps must be
+    # bridged before estimating line height, or every line is sliced into ~13 px fragments.
+    page = preprocess_page(page_factory(ruled=True, line_spacing=58), deskew=False)
+    lines = segment_lines(page.ink)
+    assert len(lines) == len(SAMPLE_LINES)
+    assert min(e - s for s, e in lines) > 30
+
+
 def test_touching_lines_are_split(page_factory):
     # Tight spacing makes descenders/ascenders of neighbouring lines touch.
     page = preprocess_page(page_factory(ruled=False, line_spacing=58), deskew=False)

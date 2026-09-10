@@ -39,6 +39,7 @@ class AnswerSegment:
     question_id: str
     lines: list[OCRLine] = field(default_factory=list)
     marker_confidence: float = 1.0
+    diagrams: list = field(default_factory=list)  # list[DiagramRegion], in reading order
 
     @property
     def text(self) -> str:
@@ -50,6 +51,7 @@ class SegmentationResult:
     answers: dict[str, AnswerSegment]
     unassigned: list[OCRLine]
     missing: list[str]
+    unassigned_diagrams: list = field(default_factory=list)
 
     @property
     def needs_llm(self) -> bool:
@@ -112,11 +114,19 @@ def segment_answers(pages: Iterable[PageOCR], expected_ids: Iterable[str] | None
     expected = {q.lower() for q in expected_ids} if expected_ids is not None else None
     answers: dict[str, AnswerSegment] = {}
     unassigned: list[OCRLine] = []
+    unassigned_diagrams: list = []
     current: AnswerSegment | None = None
     current_number = 0
 
     for page in pages:
-        for line in page.lines:
+        # Reading order by vertical position: a drawing belongs to the question it sits under.
+        items = sorted([(line.bbox[1], 0, line) for line in page.lines] +
+                       [(d.bbox[1], 1, d) for d in page.diagrams], key=lambda item: (item[0], item[1]))
+        for _, is_diagram, item in items:
+            if is_diagram:
+                (current.diagrams if current else unassigned_diagrams).append(item)
+                continue
+            line = item
             marker = parse_marker(line.text)
             qid = _resolve_id(marker, expected) if marker else None
             if qid and _accepts(marker, qid, set(answers), current_number):
@@ -128,7 +138,8 @@ def segment_answers(pages: Iterable[PageOCR], expected_ids: Iterable[str] | None
             (current.lines if current else unassigned).append(line)
 
     missing = sorted(expected - set(answers), key=_sort_key) if expected is not None else []
-    return SegmentationResult(answers=answers, unassigned=unassigned, missing=missing)
+    return SegmentationResult(answers=answers, unassigned=unassigned, missing=missing,
+                              unassigned_diagrams=unassigned_diagrams)
 
 
 def _sort_key(question_id: str) -> tuple[int, str]:

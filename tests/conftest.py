@@ -59,6 +59,62 @@ def make_page(
     return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
 
 
+CELL_LABELS = ["Nucleus", "Cell membrane", "Mitochondria", "Cytoplasm"]
+
+
+def make_diagram_page(kind: str = "cell", ruled: bool = True, skew: float = 0.0,
+                      labels: list[str] = CELL_LABELS) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """A page with text above and below a drawing. Returns (BGR image, drawing bbox x, y, w, h).
+
+    kind="cell": ellipse membrane, nucleus, mitochondria, labels with leader lines.
+    kind="flowchart": boxes with long straight edges joined by arrows.
+    """
+    width, height, spacing = 1700, 1500, 90
+    page = Image.new("L", (width, height), 245)
+    draw = ImageDraw.Draw(page)
+    if ruled:
+        for y in range(120, height - 40, spacing):
+            draw.line([(40, y), (width - 40, y)], fill=170, width=2)
+    font = _font(46)
+    small = _font(36)
+    draw.text((140, 192), "Q3. Draw a labelled diagram of an animal cell", font=font, fill=25, anchor="ls")
+    draw.text((140, 282), "The cell is shown below.", font=font, fill=25, anchor="ls")
+
+    top = 330
+    if kind == "cell":
+        box = (220, top, 900, top + 560)
+        draw.ellipse(box, outline=20, width=6)                                 # membrane
+        draw.ellipse((480, top + 190, 640, top + 330), outline=20, width=5)     # nucleus
+        draw.ellipse((300, top + 120, 400, top + 180), outline=20, width=4)     # mitochondria
+        draw.ellipse((700, top + 380, 810, top + 440), outline=20, width=4)
+        anchors = [(640, top + 260), (890, top + 300), (400, top + 150), (560, top + 470)]
+        for i, (label, anchor) in enumerate(zip(labels, anchors)):
+            y = top + 70 + i * 130
+            draw.line([anchor, (1080, y)], fill=20, width=3)
+            draw.text((1100, y + 14), label, font=small, fill=25, anchor="ls")
+        bbox = (220, top, 1100 + int(draw.textlength(max(labels, key=len), font=small)) - 220, 560)
+    elif kind == "flowchart":
+        boxes = [(300, top, 800, top + 110), (300, top + 220, 800, top + 330), (300, top + 440, 800, top + 550)]
+        for b in boxes:
+            draw.rectangle(b, outline=20, width=5)
+        for (_, _, _, y1), (_, y0, _, _) in zip(boxes, boxes[1:]):
+            draw.line([(550, y1), (550, y0)], fill=20, width=5)
+            draw.polygon([(535, y0 - 20), (565, y0 - 20), (550, y0)], fill=20)
+        for b, text in zip(boxes, ["Start", "Process", "End"]):
+            draw.text((340, b[1] + 72), text, font=small, fill=25, anchor="ls")
+        bbox = (300, top, 500, 550)
+    else:
+        raise ValueError(kind)
+
+    below = top + 560 + 130
+    draw.text((140, below), "Q4. The nucleus controls the cell.", font=font, fill=25, anchor="ls")
+    image = np.array(page, dtype=np.uint8)
+    if skew:
+        matrix = cv2.getRotationMatrix2D((width / 2, height / 2), skew, 1.0)
+        image = cv2.warpAffine(image, matrix, (width, height), borderValue=245)
+    return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR), bbox
+
+
 @pytest.fixture
 def page_factory():
     return make_page
