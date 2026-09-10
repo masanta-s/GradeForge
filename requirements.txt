@@ -1,0 +1,48 @@
+# PaperMind app environment — Python 3.14.0 (not 3.14.1), Windows x64
+# Versions verified 2026-09-10: every package has a cp314 Windows wheel or is pure Python.
+# Install:  . .\env.ps1 ; python -m pip install -r requirements.txt
+
+--extra-index-url https://download.pytorch.org/whl/cu132
+
+# --- PyTorch (CUDA 13.2 build; driver 596.08 bundles the runtime, no CUDA toolkit needed)
+torch==2.14.0+cu132
+torchvision==0.29.0+cu132
+
+# --- HuggingFace stack
+transformers==5.17.0
+peft==0.20.0
+accelerate==1.15.0
+datasets==5.0.1
+safetensors==0.8.0
+huggingface-hub==1.31.0
+
+# --- Grading / NLP
+sentence-transformers==6.0.1
+keybert==0.9.0
+rapidfuzz==3.14.6         # MCQ option-text matching
+scikit-learn==1.9.0
+numpy==2.5.3
+scipy==1.18.1
+
+# --- Vision / documents
+opencv-python-headless==5.0.0.93
+pillow==12.3.0
+scikit-image==0.26.0
+pymupdf==1.28.2
+jiwer==4.0.0
+
+# --- LLM interface
+litellm==1.100.1
+ollama==0.6.2
+
+# --- Backend
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32
+pydantic==2.13.5
+sqlalchemy==2.0.52
+keyring==25.7.0
+httpx==0.28.1
+
+# --- Dev
+pytest==9.1.1

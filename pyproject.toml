@@ -1,0 +1,11 @@
+[project]
+name = "papermind"
+version = "0.1.0"
+description = "Local-first AI exam paper evaluator"
+requires-python = ">=3.14"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+cache_dir = ".cache/pytest"
+addopts = "--basetemp=.cache/pytest-tmp"

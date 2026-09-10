@@ -1,0 +1,21 @@
+# Environments & caches (all kept on this drive — see env.ps1)
+.venv/
+.venv-train/
+.cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Model weights (downloaded by setup_env.py) — root only; src/models/ is source code
+/models/
+
+# Student data — never commit
+/data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.junie/
