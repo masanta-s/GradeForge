@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, ClipboardCheck, Lock, Play, Users } from "lucide-react";
+import { ChevronRight, ClipboardCheck, Download, Lock, Play, Users } from "lucide-react";
 import { useState } from "react";
 import { Link, useOutletContext } from "react-router";
 import { api } from "../api";
@@ -36,6 +36,17 @@ export default function StudentsPage() {
     try { job.start((await api.grade(exam.id, sheetId, settings?.strictness ?? 50)).job_id); }
     catch (e) { setError(e.message); }
   };
+  const ungraded = exam.sheets.filter((s) => s.status === "read");
+  const gradeAll = async () => {
+    setError(null);
+    try {
+      // Jobs run one at a time on the GPU in submission order; follow the last one.
+      let last = null;
+      for (const s of ungraded) last = (await api.grade(exam.id, s.id, settings?.strictness ?? 50)).job_id;
+      if (last) job.start(last);
+    } catch (e) { setError(e.message); }
+  };
+  const anyGraded = exam.sheets.some((s) => s.status === "graded");
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -45,6 +56,20 @@ export default function StudentsPage() {
             <Lock size={16} /> Finalize the answer key before grading. You can already upload sheets.
           </div>
         )}
+        {(ungraded.length > 1 && keyReady) || anyGraded ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            {anyGraded && (
+              <a className="btn-secondary py-1.5" href={`/api/exams/${exam.id}/results.csv`}>
+                <Download size={14} /> Results CSV
+              </a>
+            )}
+            {ungraded.length > 1 && keyReady && (
+              <button className="btn-primary py-1.5" disabled={job.running} onClick={gradeAll}>
+                <Play size={14} /> Grade all {ungraded.length}
+              </button>
+            )}
+          </div>
+        ) : null}
         <JobBar {...job} />
         <ErrorNote>{error}</ErrorNote>
         {exam.sheets.length ? (

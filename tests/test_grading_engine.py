@@ -78,8 +78,19 @@ def test_segmented_sheet_end_to_end(engine):
     assert q2.review_reasons[0] == "1 line(s) read with low OCR confidence"
     assert paper.unplaced_text == "Name: Riya"
     assert q3.status == "not_attempted"
-    assert "wasn't matched" in q3.review_reasons[0]
-    assert {q.question_id for q in paper.review_queue} == {"2", "3"}
+    assert q3.review_reasons == []  # a name line is on every sheet: not a sign of a misfiled answer
+    assert {q.question_id for q in paper.review_queue} == {"2"}
+
+
+def test_orphan_answer_text_flags_unattempted_questions(engine):
+    pages = [PageOCR(0, "handwriting", lines=[
+        _line("Name: Riya"),
+        _line("osmosis is movement of water"),  # answer written without its question number
+        _line("Q1. B"),
+    ])]
+    paper = engine.grade_segmentation(segment_answers(pages, KEY.question_ids))
+    q2, q3 = paper.questions[1], paper.questions[2]
+    assert "wasn't matched" in q2.review_reasons[0] and "wasn't matched" in q3.review_reasons[0]
 
 
 def test_strictness_affects_subjective_only():

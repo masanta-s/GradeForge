@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, ChevronRight, Plus } from "lucide-react";
+import { BookOpen, ChevronRight, FlaskConical, Plus } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { api } from "../api";
@@ -8,12 +8,22 @@ import { Empty, ErrorNote, Modal, PageHeader } from "../components";
 export default function ExamsPage() {
   const { data: exams, isLoading } = useQuery({ queryKey: ["exams"], queryFn: api.exams });
   const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
+  const demo = useMutation({
+    mutationFn: api.createDemo,
+    onSuccess: (r) => navigate(`/exams/${r.exam_id}/students`),
+  });
 
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader title="Exams" subtitle="Upload a question paper, prepare the answer key, then grade answer sheets.">
+        <button className="btn-secondary" disabled={demo.isPending} onClick={() => demo.mutate()}
+          title="A sample Biology test with a finalized key and three students' sheets">
+          <FlaskConical size={16} /> Load demo exam
+        </button>
         <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New exam</button>
       </PageHeader>
+      <ErrorNote>{demo.error?.message}</ErrorNote>
 
       {isLoading ? null : exams?.length ? (
         <div className="card divide-y divide-slate-100">
@@ -37,6 +47,7 @@ export default function ExamsPage() {
       ) : (
         <Empty icon={BookOpen} title="No exams yet">
           Create an exam, upload its question paper, and GradeForge will draft the answer key for you to review.
+          Or load the demo exam to try it with sample students.
         </Empty>
       )}
 

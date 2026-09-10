@@ -157,6 +157,34 @@ def test_full_teacher_workflow(client):
     assert (q2["average"], q2["teacher_changed"]) == (3.5, 1)
 
 
+def test_exports_and_demo(client):
+    import pymupdf
+
+    demo = client.post("/api/demo").json()
+    for job in demo["jobs"]:
+        wait(client, job["job_id"])
+    exam = client.get(f"/api/exams/{demo['exam_id']}").json()
+    assert exam["answer_key"]["finalized"] and [q["id"] for q in exam["questions"]] == ["1", "2", "3", "4", "5", "6"]
+    assert sorted(s["student"] for s in exam["sheets"]) == ["Arjun Mehta", "Meera Nair", "Riya Sharma"]
+    assert all(s["status"] == "read" for s in exam["sheets"])
+
+    base = f"/api/exams/{demo['exam_id']}"
+    sheet = exam["sheets"][0]
+    assert client.get(f"{base}/sheets/{sheet['id']}/report.pdf").status_code == 404  # not graded yet
+    wait(client, client.post(f"{base}/sheets/{sheet['id']}/grade", json={"strictness": 50}).json()["job_id"])
+
+    csv_text = client.get(f"{base}/results.csv").content.decode("utf-8-sig")
+    header, row = csv_text.splitlines()
+    assert header == "Student,Q1,Q2,Q3,Q4,Q5,Q6,Total,Out of,Percent,To check,Graded at"
+    assert row.startswith(sheet["student"] + ",")
+
+    pdf = client.get(f"{base}/sheets/{sheet['id']}/report.pdf")
+    assert pdf.headers["content-type"] == "application/pdf"
+    with pymupdf.open(stream=pdf.content, filetype="pdf") as doc:
+        text = doc[0].get_text()
+    assert sheet["student"] in text and "/ 15" in text and "Q6" in text
+
+
 def test_errors(client):
     assert client.get("/api/exams/nope").status_code == 404
     assert client.post("/api/exams", json={"name": " ", "subject": "x"}).status_code == 422

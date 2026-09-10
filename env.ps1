@@ -1,4 +1,4 @@
-# PaperMind shell environment — dot-source before working:  . .\env.ps1
+# GradeForge shell environment — dot-source before working:  . .\env.ps1
 # Keeps every cache, temp file and model download on this drive (nothing on C:).
 
 $Root = $PSScriptRoot
@@ -37,4 +37,4 @@ if ((Test-Path $node) -and -not ($env:PATH -split ";" -contains $node)) { $env:P
 $activate = Join-Path $Root ".venv\Scripts\Activate.ps1"
 if (Test-Path $activate) { . $activate }
 
-Write-Host "PaperMind env ready - caches in $Cache, HF models in $env:HF_HOME"
+Write-Host "GradeForge env ready - caches in $Cache, HF models in $env:HF_HOME"

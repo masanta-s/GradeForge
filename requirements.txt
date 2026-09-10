@@ -1,4 +1,4 @@
-# PaperMind app environment — Python 3.14.0 (not 3.14.1), Windows x64
+# GradeForge app environment — Python 3.14.0 (not 3.14.1), Windows x64
 # Versions verified 2026-09-10: every package has a cp314 Windows wheel or is pure Python.
 # Install:  . .\env.ps1 ; python -m pip install -r requirements.txt
 

@@ -1,5 +1,5 @@
 [project]
-name = "papermind"
+name = "gradeforge"
 version = "0.1.0"
 description = "Local-first AI exam paper evaluator"
 requires-python = ">=3.14"

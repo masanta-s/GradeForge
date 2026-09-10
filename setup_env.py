@@ -1,4 +1,4 @@
-"""PaperMind Phase 1 - environment setup and verification.
+"""GradeForge Phase 1 - environment setup and verification.
 
     . .\\env.ps1
     python setup_env.py                  # full setup
@@ -252,7 +252,7 @@ def main() -> int:
         print(f"\nSETUP FAILED: {e}", file=sys.stderr)
         return 1
 
-    print("\nPaperMind environment ready. HuggingFace runs offline from now on "
+    print("\nGradeForge environment ready. HuggingFace runs offline from now on "
           "(set PAPERMIND_ALLOW_DOWNLOADS=1 to download again).")
     return 0
 

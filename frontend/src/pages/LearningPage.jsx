@@ -110,8 +110,8 @@ export default function LearningPage() {
                   <td className="px-4 py-2">{h.mechanism === "trocr_lora" ? "Handwriting" : h.mechanism}</td>
                   <td className="px-4 py-2">{h.version}</td>
                   <td className="px-4 py-2 tabular-nums">{h.num_samples}</td>
-                  <td className="px-4 py-2 tabular-nums">{(h.metric_before * 100).toFixed(1)}%</td>
-                  <td className="px-4 py-2 tabular-nums">{(h.metric_after * 100).toFixed(1)}%</td>
+                  <td className="px-4 py-2"><ErrorBar value={h.metric_before} tone="bg-rose-400" /></td>
+                  <td className="px-4 py-2"><ErrorBar value={h.metric_after} tone={h.promoted ? "bg-emerald-500" : "bg-slate-400"} /></td>
                   <td className="px-4 py-2">{h.promoted ? <Badge tone="green">in use</Badge> : <Badge>not better, discarded</Badge>}</td>
                 </tr>
               ))}
@@ -135,6 +135,18 @@ function Mechanism({ n, icon: Icon, title, active, status, children }) {
       </div>
       {status && <div className="mb-2 text-xs font-medium text-slate-500">{status}</div>}
       <div className="text-sm text-slate-600">{children}</div>
+    </div>
+  );
+}
+
+// Character error rate as a bar (0-50 % scale) plus the number: before/after at a glance.
+function ErrorBar({ value, tone }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-2 w-24 rounded-full bg-slate-100">
+        <div className={clsx("h-full rounded-full", tone)} style={{ width: `${Math.min(100, value * 200)}%` }} />
+      </div>
+      <span className="tabular-nums">{(value * 100).toFixed(1)}%</span>
     </div>
   );
 }

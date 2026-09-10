@@ -7,6 +7,7 @@ disagreement, text the segmenter couldn't place — so the review screen can say
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Literal
@@ -18,6 +19,9 @@ from src.grading.mcq_grader import MCQResult, grade_mcq, split_mixed_answer
 from src.grading.structured_output import CompletionFn
 from src.grading.subjective_grader import GradedExample, SubjectiveGrader, SubjectiveResult
 from src.ocr.answer_segmenter import SegmentationResult
+
+
+_HEADER = re.compile(r"^\s*(name|roll|class|section|div|date|subject|reg(istration)?|student|school|exam)\b", re.I)
 
 
 def _mcq_reasons(result: MCQResult) -> list[str]:
@@ -195,6 +199,9 @@ class GradingEngine:
         paper = self.grade_answers(answers, diagrams)
         unplaced = "\n".join(line.text for line in segmentation.unassigned if line.text.strip())
         paper.unplaced_text = unplaced
+        # Header lines (name, roll no., class...) are on every sheet; only other orphan text
+        # suggests an answer was misfiled.
+        orphans = [line for line in segmentation.unassigned if line.text.strip() and not _HEADER.match(line.text)]
 
         for grade in paper.questions:
             segment = segmentation.answers.get(grade.question_id)
@@ -202,6 +209,6 @@ class GradingEngine:
                 shaky = [line for line in segment.lines if line.needs_review]
                 if shaky:
                     grade.review_reasons.insert(0, f"{len(shaky)} line(s) read with low OCR confidence")
-            elif grade.status == "not_attempted" and unplaced:
+            elif grade.status == "not_attempted" and orphans:
                 grade.review_reasons.append("not found, but the sheet has text that wasn't matched to a question")
         return paper

@@ -35,6 +35,7 @@ export const api = {
   job: (id) => request(`/jobs/${id}`),
 
   exams: () => request("/exams"),
+  createDemo: () => request("/demo", { method: "POST" }),
   createExam: (name, subject) => request("/exams", { method: "POST", body: { name, subject } }),
   exam: (id) => request(`/exams/${id}`),
   analytics: (id) => request(`/exams/${id}/analytics`),

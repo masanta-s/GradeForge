@@ -7,7 +7,12 @@ import { Badge, ErrorNote } from "../components";
 
 export default function ExamPage() {
   const { examId } = useParams();
-  const { data: exam, error } = useQuery({ queryKey: ["exam", examId], queryFn: () => api.exam(examId) });
+  const { data: exam, error } = useQuery({
+    queryKey: ["exam", examId],
+    queryFn: () => api.exam(examId),
+    // keep refreshing while sheets are still being read in the background (e.g. the demo)
+    refetchInterval: (q) => (q.state.data?.sheets.some((s) => s.status === "uploaded") ? 2000 : false),
+  });
   if (error) return <ErrorNote>{error.message}</ErrorNote>;
   if (!exam) return null;
 

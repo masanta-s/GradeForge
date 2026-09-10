@@ -39,7 +39,10 @@ export default function SheetReviewPage() {
           <h1 className="text-2xl font-semibold text-slate-900">{sheet.student}</h1>
           {result && (
             <p className="mt-1 text-sm text-slate-500">
-              Graded by {result.model} · {new Date(result.graded_at).toLocaleString()}
+              Graded by {result.model} · {new Date(result.graded_at).toLocaleString()} ·{" "}
+              <a className="text-brand-600 hover:underline" href={`/api/exams/${examId}/sheets/${sheetId}/report.pdf`}>
+                Report card (PDF)
+              </a>
             </p>
           )}
         </div>

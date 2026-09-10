@@ -1,40 +1,86 @@
-# PaperMind — AI Exam Paper Evaluator
+# GradeForge: local AI exam grading
 
-Local-first exam evaluator: reads handwritten answer sheets (TrOCR), grades them with a
-configurable strictness curve and a local LLM (Ollama), collaborates with the teacher on the
-answer key, and learns from corrections through four mechanisms. **Student data never leaves
-the machine.**
+GradeForge reads students' handwritten answer sheets, grades them against the teacher's answer
+key with a local AI model, and learns from the teacher's corrections. It handles MCQs, written
+answers, "choose the option and justify" questions and labelled diagrams.
 
-Full design: [`implementation_plan_updated3.md`](implementation_plan_updated3.md).
+**Student data never leaves the computer.** OCR, grading and learning run locally on one
+8 GB laptop GPU (TrOCR, MiniLM and `qwen3.5:9b` through Ollama). Cloud models are opt-in and
+blocked without explicit consent.
 
-## Status
+## What a teacher does
 
-| Phase | State |
+1. **Upload the question paper** (PDF or photo). Questions, marks, MCQ options and sub-parts
+   are detected; numbered instructions are skipped.
+2. **Get an answer key.** The AI drafts one, or the teacher writes it. The AI then checks the
+   teacher's key (MCQs are solved blind, so it isn't anchored to the teacher's choice).
+   Disagreements open a dispute: accept, argue, or keep your answer. Every decision is logged.
+3. **Upload answer sheets.** Handwriting is read line by line, drawings are detected, and each
+   line and drawing is matched to its question.
+4. **Grade.** Every mark comes with feedback and, when something is uncertain, a plain reason
+   to check it. A strictness slider (0-100) re-scores instantly without re-running any model.
+5. **Correct.** Fix a misread line or change a mark. Corrections are kept as the teacher's
+   intent and improve future grading.
+
+Try it without preparing files: **Exams → Load demo exam** creates a Biology test with a
+finalized key and three students (strong, weak, and one who skipped the diagram).
+
+## How it learns
+
+| # | Mechanism | Works with | Starts after |
+|---|---|---|---|
+| 1 | Past corrections of similar answers are shown to the AI as examples | every model, cloud included | 1 correction |
+| 2 | Isotonic calibration of each model's bias against the teacher, per subject | every model | 15 corrections |
+| 3 | LoRA fine-tuning of TrOCR on corrected lines; used only if held-out error drops | the handwriting reader | 20 lines |
+| 4 | A Colab/Kaggle notebook that fine-tunes the grading model (an 8 GB GPU can't) | Gemma 4 E4B | 200 recommended |
+
+## Measured on this build (RTX 4060 Laptop, 8 GB)
+
+| What | Result |
 |---|---|
-| 1. Setup & environment | ✅ |
-| 2. OCR pipeline | 🟡 built + tested on synthetic pages; needs real answer sheets |
-| 3. Grading + strictness | ✅ MCQ, subjective (hybrid LLM + embeddings), mixed choose-and-justify |
-| 4. Diagrams | ✅ detection, label reading, vision-model judgement, teacher weightage |
-| 5. Knowledge engine | ✅ question-paper parsing, AI answer keys, validation, disputes + audit log |
-| 6. React + FastAPI UI | ✅ exams, answer-key review + disputes, grading, sheet review, analytics, settings |
-| 7. Self-learning | ✅ few-shot, calibration, TrOCR LoRA (CER-gated), Colab notebook export |
-| 8. Polish | ⏳ |
+| `qwen3.5:9b` VRAM @ 8K context | 5.24 GiB, 100 % on GPU (16K context spills to CPU) |
+| TrOCR + MiniLM + `qwen3.5:9b` together | 7.38 of 8.19 GB, all on GPU |
+| One written answer graded (thinking off) | ~3 s (thinking on: ~55 s, same result) |
+| Full 6-question sheet: read + graded | ~8 s OCR + ~13 s grading |
+| Answer key for 6 questions | ~29 s, all correct in the test paper |
+| OCR on synthetic handwriting-font pages | 0-2 % character error rate |
+| TrOCR fine-tune on a difficult (simulated) writer | held-out CER 23.1 % → 1.5 %; unseen words 11.7 % → 0.8 %; ~22 s |
+| Diagram scoring (complete / one label / wrong diagram) | 4/4, 2.5/4, 0/4 |
 
-## Requirements
+These are synthetic test pages. Real handwriting will be harder, and that is the main thing
+still to validate (see *Limitations*).
 
-| | Version | Notes |
-|---|---|---|
-| Windows | 11 | |
-| Python | **3.14.0** | not 3.14.1 (excluded by torchvision 0.29) |
-| NVIDIA driver | CUDA 13.2+ | no CUDA toolkit needed — PyTorch bundles the runtime |
-| GPU | 8 GB VRAM | tested on RTX 4060 Laptop |
-| Ollama | 0.34+ | |
-| Node | 24 LTS | for the frontend (Phase 6) |
+## Architecture
 
-## Setup (PowerShell)
+```mermaid
+flowchart LR
+    UI["React app"] --> API["FastAPI + job queue<br/>(one GPU worker)"]
+    API --> OCR["OCR: deskew, rules, lines<br/>TrOCR (+ LoRA)"]
+    API --> DG["Diagrams: detect,<br/>read labels, vision judge"]
+    API --> GR["Grading: MCQ, written,<br/>mixed, strictness curve"]
+    API --> KN["Knowledge: paper parsing,<br/>answer keys, disputes"]
+    GR --> LLM["qwen3.5:9b via Ollama<br/>(LiteLLM)"]
+    KN --> LLM
+    DG --> LLM
+    API --> LE["Learning: corrections,<br/>few-shot, calibration, fine-tune"]
+    LE --> GR
+    LE --> OCR
+```
 
-Everything — venv, pip cache, temp files, HuggingFace models — stays inside this folder.
-`env.ps1` redirects all caches away from `C:`.
+`src/ocr`, `src/grading`, `src/diagram` and `src/learning` cannot import network libraries,
+and `tests/test_privacy_boundary.py` enforces it. Models reach them only as injected functions.
+
+## Setup (Windows, PowerShell)
+
+Everything (venv, pip cache, temp files, model weights, Node) stays inside the project
+folder; `env.ps1` redirects every cache away from `C:`.
+
+| Needs | Version |
+|---|---|
+| Python | **3.14.0** (not 3.14.1, which torchvision 0.29 excludes) |
+| NVIDIA driver | CUDA 13.2+ (no CUDA toolkit needed) |
+| Ollama | 0.34+ |
+| Node | ≥ 22.22: the official portable zip unpacked to `tools\node` |
 
 ```bash
 py -3.14 -m venv .venv
@@ -48,76 +94,11 @@ py -3.14 -m venv .venv
 python setup_env.py
 ```
 
-`setup_env.py` checks Python and the driver, installs `requirements.txt` (PyTorch 2.14 +
-CUDA 13.2 from the PyTorch index), pulls `qwen3.5:9b` if missing, **measures** each LLM's real
-VRAM through Ollama's `/api/ps`, downloads TrOCR and MiniLM into `models/`, and smoke-tests
-both on the GPU. After that, HuggingFace runs offline (`HF_HUB_OFFLINE=1` is set by
-`src/config.py`; use `PAPERMIND_ALLOW_DOWNLOADS=1` to download again).
+`setup_env.py` checks the driver, installs `requirements.txt` (PyTorch 2.14 + CUDA 13.2), pulls
+`qwen3.5:9b`, measures each model's real VRAM, downloads TrOCR and MiniLM, and smoke-tests them
+on the GPU. After that, HuggingFace runs offline.
 
-Flags: `--skip-install`, `--skip-ollama`, `--no-pull`, `--skip-models`.
-
-## Models
-
-| Role | Model | Where |
-|---|---|---|
-| Default LLM (grading, answer keys, validation) | `qwen3.5:9b` | Ollama |
-| Fast / co-resident LLM, Colab fine-tune target | `gemma4:e4b` | Ollama |
-| Handwriting OCR | `microsoft/trocr-base-handwritten` | `models/trocr_base/` |
-| Answer similarity | `all-MiniLM-L6-v2` | `models/embedders/` |
-
-Defaults only — any model Ollama serves can be selected.
-
-## Environments
-
-- **`.venv`** — the app, on the latest libraries (`requirements.txt`).
-- **`.venv-train`** — optional, only for local LLM fine-tuning on a ≥10 GB GPU
-  (`requirements-train.txt`, pinned by Unsloth). On an 8 GB GPU, LLM fine-tuning is exported
-  to Colab/Kaggle instead.
-
-## Layout
-
-```
-src/config.py              paths, model defaults, cache/offline environment
-src/models/ollama_probe.py Layer 1: identify models + measure real VRAM via Ollama
-src/ocr/preprocessing.py   illumination, deskew, ruled-line/page-edge removal, line segmentation
-src/ocr/text_extractor.py  TrOCR line reading with per-line confidence
-src/ocr/pipeline.py        image/PDF -> pages -> lines (digital PDFs use their text layer)
-src/ocr/answer_segmenter.py  map lines to question numbers (Q3 / Ans 3 / 3(b) ...)
-src/diagram/detector.py    find drawings (tall + sparse strokes), keep them out of text lines
-src/diagram/label_extractor.py  read label words inside a drawing with TrOCR
-src/diagram/evaluator.py   labels + vision-model structure/completeness (SSIM only as fallback)
-src/diagram/weightage.py   teacher's diagram marks, required labels, weights
-src/grading/answer_key.py  questions: mcq | short | descriptive | mixed (choose + justify), + optional diagram
-src/grading/strictness_curve.py  0-100 slider -> marks curve, similarity rescaling
-src/grading/mcq_grader.py  option detection ("(b)", "Option B", option text, 8->B ...)
-src/grading/subjective_grader.py  LLM judges, embeddings + keywords cross-check
-src/grading/structured_output.py  4-layer JSON defence (schema, tolerant parse, repair, regex)
-src/grading/grading_engine.py  answer key + segmented sheet -> graded paper + review reasons
-src/knowledge/llm_client.py  LiteLLM -> Ollama (think off, 8K ctx) / opt-in cloud
-src/knowledge/question_parser.py  question paper -> questions, marks, options, sub-parts
-src/knowledge/answer_generator.py  AI answer key per question type (flags low confidence)
-src/knowledge/answer_validator.py  check teacher's key (MCQs solved blind, no anchoring)
-src/knowledge/dispute_manager.py  accept / discuss / insist flow for flagged entries
-src/knowledge/dispute_logger.py  SQLite audit trail, search, CSV export
-demo/run_demo.py           end-to-end: sheet image -> OCR -> grading report
-src/learning/correction_store.py  teacher corrections as intent (SQLite), training history
-src/learning/correction_retriever.py  mechanism 1: similar past gradings as few-shot examples
-src/learning/score_calibrator.py  mechanism 2: isotonic bias correction per model + subject
-src/learning/ocr_fine_tuner.py  mechanism 3: TrOCR LoRA, promoted only if held-out CER drops
-src/learning/llm_finetune_export.py  mechanism 4: Colab/Kaggle notebook (8 GB GPU can't train)
-server/                    FastAPI: routes, background jobs, storage, what-if rescoring
-frontend/                  React 19 + Vite 8 + Tailwind 4 app (8 screens)
-setup_env.py               Phase 1 setup + verification
-env.ps1                    shell environment (caches on this drive)
-tests/                     pytest suite (synthetic answer sheets, GPU tests auto-skip)
-models/                    downloaded weights (git-ignored)
-data/                      SQLite DBs + student data (git-ignored)
-```
-
-## Run the app
-
-Build the frontend once (uses the portable Node in `tools\node`, see below), then start the API,
-which also serves the app:
+Build the app once, then start the server, which also serves the app:
 
 ```bash
 cd frontend; npm install; npm run build; cd ..
@@ -127,21 +108,7 @@ cd frontend; npm install; npm run build; cd ..
 python -m uvicorn server.main:app --port 8000
 ```
 
-Open http://localhost:8000. For frontend development, run `npm run dev` in `frontend/`
-(Vite on :5173, proxying `/api` to :8000).
-
-**Node:** the frontend needs Node ≥ 22.22 (react-router 8). To keep everything off `C:`, use
-the official portable zip unpacked to `tools\node`; `env.ps1` puts it first on `PATH`.
-
-## Demo
-
-```bash
-python -m demo.run_demo
-```
-
-Renders a sample answer sheet (handwriting-style font, ruled, tilted, uneven light), runs OCR,
-maps lines and drawings to questions, and grades MCQ, written, choose-and-justify and
-labelled-diagram answers with `qwen3.5:9b`. Use `--sheet photo.jpg` for your own sheet, `--strictness 0-100`, or `--no-llm`.
+Open http://localhost:8000. A command-line demo is also available: `python -m demo.run_demo`.
 
 ## Tests
 
@@ -149,5 +116,35 @@ labelled-diagram answers with `qwen3.5:9b`. Use `--sheet photo.jpg` for your own
 python -m pytest -q
 ```
 
-`tests/test_privacy_boundary.py` fails the build if anything under `src/ocr/` or
-`src/grading/` imports a network library.
+About 270 tests. GPU and Ollama integration tests run the real models and skip themselves
+when unavailable. A session guard fails the run if any test touches the real `data/` folder.
+
+## Layout
+
+```
+src/ocr/          preprocessing, TrOCR reading, PDF text layer, answers -> questions
+src/diagram/      drawing detection, label reading, scoring, teacher weightage
+src/grading/      answer key model, MCQ + written + mixed grading, strictness, JSON defence
+src/knowledge/    LLM client, question-paper parser, answer keys, validation, disputes
+src/learning/     corrections store, few-shot retrieval, calibration, TrOCR LoRA, notebook export
+src/models/       Ollama model identification and measured VRAM
+server/           FastAPI routes, background jobs, file storage, what-if rescoring, exports
+frontend/         React 19 + Vite 8 + Tailwind 4
+demo/             sample exam, students and sheet renderer
+tests/            pytest suite
+```
+
+## Limitations
+
+- **Not yet validated on real students' handwriting.** All OCR numbers above come from
+  handwriting-style fonts and simulated writers.
+- The Colab fine-tuning notebook is generated but has not been run end to end; check the
+  base-model id and Unsloth calls on first use.
+- Planned but not built yet: a capability probe that tests an unknown model before it grades,
+  HuggingFace source resolution and architecture checks for new models, cloud-provider settings
+  in the UI, and checkpoint clean-up.
+- Label reading inside diagrams uses TrOCR, so labels touching drawing lines can be missed. The
+  vision model's own reading of the labels covers most of these.
+
+Design notes and every decision made along the way:
+[`implementation_plan_updated3.md`](implementation_plan_updated3.md).

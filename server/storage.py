@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,15 +40,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# Background jobs write JSON while request threads read it. On Windows, replacing a file that
+# another thread has open fails with PermissionError (Linux allows it), so file access is
+# serialised within the process. The retry covers antivirus / search indexers briefly holding
+# a freshly written file open.
+_IO_LOCK = threading.RLock()
+
+
 def _write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)  # atomic: a crash never leaves half a file
+    text = json.dumps(data, indent=2, ensure_ascii=False)
+    with _IO_LOCK:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        for attempt in range(20):
+            try:
+                tmp.replace(path)  # atomic: a crash never leaves half a file
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
 
 
 def _read_json(path: Path):
-    return json.loads(path.read_text(encoding="utf-8"))
+    with _IO_LOCK:
+        return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _save_png(path: Path, image: np.ndarray) -> str:
