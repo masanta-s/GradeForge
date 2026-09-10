@@ -11,6 +11,7 @@ check first; the teacher reviews every entry before the key is finalized.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 from src.diagram.weightage import DiagramSpec
@@ -47,7 +48,7 @@ SCHEMAS = {
 # Key points (phrases) guide the LLM grader; keywords (single technical terms) feed the local
 # typo-tolerant cross-check, which can't match whole phrases against a student's own wording.
 _KEYWORDS = ("keywords: 2-6 essential technical terms of 1-3 words each that a correct answer must "
-             "contain (e.g. 'chlorophyll', 'semi-permeable membrane').")
+             "contain (e.g. 'chlorophyll', 'semi-permeable membrane'), not words already in the question.")
 INSTRUCTIONS = {
     "mcq": "Choose the single correct option. Give its letter in correct_option and a one-line explanation.",
     "mixed": ("Choose the correct option (letter in correct_option), then write the model justification a "
@@ -61,9 +62,16 @@ INSTRUCTIONS = {
 }
 
 
-def _terms(data: dict) -> tuple[list[str], list[str]]:
+def _terms(data: dict, question_text: str) -> tuple[list[str], list[str]]:
+    """Key points and keywords. A keyword made only of words from the question ("photosynthesis"
+    for "What is photosynthesis?") says nothing about the answer, so it is dropped."""
+    question_words = set(re.findall(r"[a-z0-9]+", question_text.lower()))
     points = [str(p) for p in data.get("key_points", []) if str(p).strip()]
-    keywords = [str(k) for k in data.get("keywords", []) if str(k).strip() and len(str(k).split()) <= 3]
+    keywords = []
+    for raw in data.get("keywords", []):
+        words = re.findall(r"[a-z0-9]+", str(raw).lower())
+        if words and len(words) <= 3 and not set(words) <= question_words:
+            keywords.append(str(raw).strip())
     return points, keywords
 
 
@@ -105,11 +113,11 @@ def generate_question(pq: ParsedQuestion, llm: CompletionFn, subject: str, exam:
         question.explanation = str(data.get("explanation", ""))
         if kind == "mixed":
             question.model_answer = str(data.get("model_answer", ""))
-            question.key_points, question.keywords = _terms(data)
+            question.key_points, question.keywords = _terms(data, pq.text)
             question.option_marks = 1.0 if marks > 1 else marks / 2
     elif kind == "written":
         question.model_answer = str(data.get("model_answer", ""))
-        question.key_points, question.keywords = _terms(data)
+        question.key_points, question.keywords = _terms(data, pq.text)
         if pq.marks is None and data.get("suggested_marks"):
             question.max_marks = float(data["suggested_marks"])
     else:  # diagram
@@ -122,7 +130,7 @@ def generate_question(pq: ParsedQuestion, llm: CompletionFn, subject: str, exam:
         )
         if diagram_marks < marks:
             question.model_answer = str(data.get("model_answer", ""))
-            question.key_points, question.keywords = _terms(data)
+            question.key_points, question.keywords = _terms(data, pq.text)
     return question
 
 
@@ -133,9 +141,12 @@ def generate_answer_key(
     subject: str,
     exam: str,
     on_progress: Callable[[int, int, Question], None] | None = None,
+    on_start: Callable[[int, int, ParsedQuestion], None] | None = None,
 ) -> AnswerKey:
     generated = []
     for i, pq in enumerate(questions, 1):
+        if on_start:  # so a UI can say what's happening during the (slow) model call
+            on_start(i, len(questions), pq)
         question = generate_question(pq, llm, subject, exam)
         generated.append(question)
         if on_progress:

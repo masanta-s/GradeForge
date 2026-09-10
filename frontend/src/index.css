@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* System fonts only: the app runs offline, and a font CDN would leak the school's IP. */
+@theme {
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+}
+
+body {
+  @apply bg-slate-50 text-slate-800 antialiased;
+}
+
+/* Tailwind v4: shared styles must be @utility (plain classes can't be @apply'd). */
+@utility card {
+  @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium
+    transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility btn-primary {
+  @apply btn bg-brand-600 text-white hover:bg-brand-700;
+}
+
+@utility btn-secondary {
+  @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+}
+
+@utility btn-ghost {
+  @apply btn text-slate-600 hover:bg-slate-100;
+}
+
+@utility input {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm
+    focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100;
+}
+
+@utility label {
+  @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500;
+}

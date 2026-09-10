@@ -30,6 +30,10 @@ $env:LITELLM_LOCAL_MODEL_COST_MAP = "True"
 
 # Ollama stores models wherever its app is configured (Settings -> model location / OLLAMA_MODELS).
 
+# Portable Node 24 LTS for the frontend (tools\node), ahead of any system Node.
+$node = Join-Path $Root "tools\node"
+if ((Test-Path $node) -and -not ($env:PATH -split ";" -contains $node)) { $env:PATH = "$node;$env:PATH" }
+
 $activate = Join-Path $Root ".venv\Scripts\Activate.ps1"
 if (Test-Path $activate) { . $activate }
 

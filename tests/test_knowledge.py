@@ -43,13 +43,14 @@ def test_generate_mcq():
 def test_generate_written_uses_suggested_marks_only_when_paper_has_none():
     reply = {"model_answer": "Osmosis is ...",
              "key_points": ["Movement of water molecules", "Through a semi-permeable membrane"],
-             "keywords": ["water", "semi-permeable membrane", "a phrase far too long to be a keyword"],
+             "keywords": ["water", "semi-permeable membrane", "a phrase far too long to be a keyword",
+                          "Osmosis"],  # just repeats the question: says nothing about the answer
              "suggested_marks": 3, "confidence": 0.9}
     stated = generate_question(ParsedQuestion("2", "Define osmosis.", 2.0), SchemaLLM(model_answer=reply), "Bio", "T")
     unstated = generate_question(ParsedQuestion("2", "Define osmosis.", None), SchemaLLM(model_answer=reply), "Bio", "T")
     assert (stated.max_marks, unstated.max_marks) == (2.0, 3.0)
     assert stated.key_points == ["Movement of water molecules", "Through a semi-permeable membrane"]
-    assert stated.keywords == ["water", "semi-permeable membrane"]  # >3-word "keywords" dropped
+    assert stated.keywords == ["water", "semi-permeable membrane"]  # long phrase and question word dropped
 
 
 def test_generate_mixed_splits_marks():

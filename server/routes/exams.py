@@ -110,6 +110,38 @@ def put_questions(exam_id: str, questions: list[QuestionIn], services: Services 
     return exam["questions"]
 
 
+@router.get("/exams/{exam_id}/analytics")
+def exam_analytics(exam_id: str, services: Services = Depends(get_services)) -> dict:
+    """Class results from stored grades: score spread and per-question difficulty."""
+    with not_found("exam"):
+        exam = services.storage.get_exam(exam_id)
+        results = [r for s in services.storage.list_sheets(exam_id)
+                   if (r := services.storage.get_result(exam_id, s["id"])) is not None]
+    per_question: dict[str, dict] = {}
+    for result in results:
+        for q in result["questions"]:
+            stats = per_question.setdefault(q["question_id"], {
+                "question_id": q["question_id"], "qtype": q["qtype"], "max_marks": q["max_marks"],
+                "marks": [], "flagged": 0, "teacher_changed": 0, "not_attempted": 0})
+            stats["marks"].append(q["marks"])
+            stats["flagged"] += bool(q["review_reasons"])
+            stats["teacher_changed"] += q.get("teacher_marks") is not None
+            stats["not_attempted"] += q["status"] == "not_attempted"
+    questions = []
+    for stats in per_question.values():
+        marks = stats.pop("marks")
+        questions.append({**stats, "average": sum(marks) / len(marks),
+                          "full_marks": sum(m >= stats["max_marks"] for m in marks),
+                          "zero": sum(m == 0 for m in marks)})
+    return {
+        "exam": {"id": exam["id"], "name": exam["name"], "subject": exam["subject"]},
+        "students": len(results),
+        "percentages": [round(r["percentage"], 1) for r in results],
+        "average_percentage": sum(r["percentage"] for r in results) / len(results) if results else None,
+        "questions": questions,
+    }
+
+
 # --- answer key --------------------------------------------------------------------------
 
 @router.post("/exams/{exam_id}/answer-key/generate")
@@ -125,7 +157,8 @@ def generate_key(exam_id: str, services: Services = Depends(get_services)) -> di
 
         key = generate_answer_key(
             parsed, services.llm, subject=exam["subject"], exam=exam["name"],
-            on_progress=lambda i, n, q: job.report(i / n, f"Answered question {q.id} ({i}/{n})"),
+            on_start=lambda i, n, pq: job.report((i - 1) / n, f"Answering question {pq.id} ({i} of {n})"),
+            on_progress=lambda i, n, q: job.report(i / n),
         )
         services.storage.save_key(exam_id, key)
         return {"review": [{"question_id": q.id, "reason": reason} for q, reason in review_needed(key)]}

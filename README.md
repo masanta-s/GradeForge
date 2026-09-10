@@ -16,7 +16,7 @@ Full design: [`implementation_plan_updated3.md`](implementation_plan_updated3.md
 | 3. Grading + strictness | ✅ MCQ, subjective (hybrid LLM + embeddings), mixed choose-and-justify |
 | 4. Diagrams | ✅ detection, label reading, vision-model judgement, teacher weightage |
 | 5. Knowledge engine | ✅ question-paper parsing, AI answer keys, validation, disputes + audit log |
-| 6. React + FastAPI UI | ⏳ |
+| 6. React + FastAPI UI | ✅ exams, answer-key review + disputes, grading, sheet review, analytics, settings |
 | 7. Self-learning | ⏳ |
 | 8. Polish | ⏳ |
 
@@ -100,12 +100,33 @@ src/knowledge/answer_validator.py  check teacher's key (MCQs solved blind, no an
 src/knowledge/dispute_manager.py  accept / discuss / insist flow for flagged entries
 src/knowledge/dispute_logger.py  SQLite audit trail, search, CSV export
 demo/run_demo.py           end-to-end: sheet image -> OCR -> grading report
+server/                    FastAPI: routes, background jobs, storage, what-if rescoring
+frontend/                  React 19 + Vite 8 + Tailwind 4 app (8 screens)
 setup_env.py               Phase 1 setup + verification
 env.ps1                    shell environment (caches on this drive)
 tests/                     pytest suite (synthetic answer sheets, GPU tests auto-skip)
 models/                    downloaded weights (git-ignored)
 data/                      SQLite DBs + student data (git-ignored)
 ```
+
+## Run the app
+
+Build the frontend once (uses the portable Node in `tools\node`, see below), then start the API,
+which also serves the app:
+
+```bash
+cd frontend; npm install; npm run build; cd ..
+```
+
+```bash
+python -m uvicorn server.main:app --port 8000
+```
+
+Open http://localhost:8000. For frontend development, run `npm run dev` in `frontend/`
+(Vite on :5173, proxying `/api` to :8000).
+
+**Node:** the frontend needs Node ≥ 22.22 (react-router 8). To keep everything off `C:`, use
+the official portable zip unpacked to `tools\node`; `env.ps1` puts it first on `PATH`.
 
 ## Demo
 

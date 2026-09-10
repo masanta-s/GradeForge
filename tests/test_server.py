@@ -142,6 +142,18 @@ def test_full_teacher_workflow(client):
     csv = client.get("/api/disputes/export.csv")
     assert csv.status_code == 200 and "Mrs. Iyer" in csv.text
 
+    # 10. applying a strictness saves the rescored result (teacher's mark still kept)
+    applied = client.post(f"{base}/sheets/{sheet_id}/what-if", json={"strictness": 0, "save": True}).json()
+    saved = client.get(f"{base}/sheets/{sheet_id}").json()["result"]
+    assert saved["strictness"] == 0 and saved["total"] == applied["total"]
+    assert saved["questions"][1]["marks"] == 3.5
+
+    # 11. class analytics
+    stats = client.get(f"{base}/analytics").json()
+    assert stats["students"] == 1 and stats["percentages"] == [round(saved["percentage"], 1)]
+    q2 = next(q for q in stats["questions"] if q["question_id"] == "2")
+    assert (q2["average"], q2["teacher_changed"]) == (3.5, 1)
+
 
 def test_errors(client):
     assert client.get("/api/exams/nope").status_code == 404

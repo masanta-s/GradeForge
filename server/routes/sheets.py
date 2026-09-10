@@ -27,6 +27,7 @@ class GradeIn(BaseModel):
 
 class WhatIf(BaseModel):
     strictness: float = Field(ge=0, le=100)
+    save: bool = False  # apply it: the rescored result becomes the sheet's result (still no model calls)
 
 
 class MarksFix(BaseModel):
@@ -130,12 +131,16 @@ def grade_sheet(exam_id: str, sheet_id: str, body: GradeIn | None = None,
 
 @router.post("/{sheet_id}/what-if")
 def what_if(exam_id: str, sheet_id: str, body: WhatIf, services: Services = Depends(get_services)) -> dict:
-    """Marks at another strictness, from stored qualities: instant, no model calls, not saved."""
+    """Marks at another strictness, from stored qualities: instant, no model calls.
+    Preview by default; `save` applies it to the sheet."""
     with not_found("result"):
         result = services.storage.get_result(exam_id, sheet_id)
         if result is None:
             raise KeyError("result")
-    return rescore(result, body.strictness)
+    rescored = rescore(result, body.strictness)
+    if body.save:
+        services.storage.save_result(exam_id, sheet_id, rescored)
+    return rescored
 
 
 @router.put("/{sheet_id}/questions/{question_id}")

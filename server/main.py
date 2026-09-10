@@ -14,12 +14,26 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src import config  # noqa: F401  (redirects caches/temp; offline HuggingFace)
 from server.routes import exams, sheets, system
 from server.services import Services
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve the React build; unknown non-API paths get index.html so client-side routes
+    (e.g. a refresh on /exams/abc) load the app instead of a 404."""
+
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as e:
+            if e.status_code == 404 and not path.startswith("api"):
+                return await super().get_response("index.html", scope)
+            raise
 
 
 def create_app(services: Services | None = None) -> FastAPI:
@@ -38,7 +52,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     for module in (system, exams, sheets):
         app.include_router(module.router)
     if FRONTEND_DIST.is_dir():
-        app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+        app.mount("/", SPAStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
     return app
 
 
