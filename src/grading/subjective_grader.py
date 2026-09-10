@@ -18,7 +18,7 @@ correctness; a 70/30 blend tied that wrong answer with a partially correct one.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -182,7 +182,10 @@ class SubjectiveGrader:
         *,
         llm: CompletionFn | None = None,
         examples: Sequence[GradedExample] = (),
+        calibrate: Callable[[float], float] | None = None,
     ) -> SubjectiveResult:
+        """`examples`: the teacher's past gradings of similar answers (few-shot, mechanism 1).
+        `calibrate`: maps the model's quality to this teacher's scale (mechanism 2)."""
         if not answer.strip():
             return SubjectiveResult(
                 question_id=question.id, marks=0.0, max_marks=question.max_marks, quality=0.0,
@@ -214,6 +217,8 @@ class SubjectiveGrader:
                     "Missing: " + ", ".join(missing) + "." if missing else "")
         else:
             quality, method = llm_quality, "hybrid"
+            if calibrate is not None:
+                quality = float(np.clip(calibrate(llm_quality), 0.0, 1.0))
 
         review_reason = ""
         if llm is not None and llm_quality is None:

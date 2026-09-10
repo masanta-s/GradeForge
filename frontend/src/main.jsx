@@ -8,6 +8,7 @@ import AnswerKeyPage from "./pages/AnswerKeyPage";
 import DisputesPage from "./pages/DisputesPage";
 import ExamPage from "./pages/ExamPage";
 import ExamsPage from "./pages/ExamsPage";
+import LearningPage from "./pages/LearningPage";
 import SettingsPage from "./pages/SettingsPage";
 import SheetReviewPage from "./pages/SheetReviewPage";
 import StudentsPage from "./pages/StudentsPage";
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
       { path: "/exams/:examId/sheets/:sheetId", element: <SheetReviewPage /> },
       { path: "/disputes", element: <DisputesPage /> },
       { path: "/analytics", element: <Suspense fallback={null}><AnalyticsPage /></Suspense> },
+      { path: "/learning", element: <LearningPage /> },
       { path: "/settings", element: <SettingsPage /> },
     ],
   },

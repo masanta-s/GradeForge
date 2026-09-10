@@ -61,6 +61,20 @@ export const api = {
     request(`/exams/${id}/sheets/${sid}/questions/${qid}`, { method: "PUT", body }),
 
   disputes: (params) => request(`/disputes?${new URLSearchParams(params)}`),
+
+  learning: () => request("/learning/status"),
+  trainTrocr: (writer) => request("/learning/trocr/train", { method: "POST", body: { writer } }),
+  exportNotebook: async () => {
+    const response = await fetch("/api/learning/llm/export", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true }),
+    });
+    if (!response.ok) throw new ApiError(response.status, (await response.json()).detail);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await response.blob());
+    link.download = "gradeforge_finetune.ipynb";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  },
 };
 
 export const assetUrl = (examId, sheetId, kind, name) => `/api/exams/${examId}/sheets/${sheetId}/${kind}/${name}`;

@@ -17,7 +17,7 @@ Full design: [`implementation_plan_updated3.md`](implementation_plan_updated3.md
 | 4. Diagrams | ✅ detection, label reading, vision-model judgement, teacher weightage |
 | 5. Knowledge engine | ✅ question-paper parsing, AI answer keys, validation, disputes + audit log |
 | 6. React + FastAPI UI | ✅ exams, answer-key review + disputes, grading, sheet review, analytics, settings |
-| 7. Self-learning | ⏳ |
+| 7. Self-learning | ✅ few-shot, calibration, TrOCR LoRA (CER-gated), Colab notebook export |
 | 8. Polish | ⏳ |
 
 ## Requirements
@@ -100,6 +100,11 @@ src/knowledge/answer_validator.py  check teacher's key (MCQs solved blind, no an
 src/knowledge/dispute_manager.py  accept / discuss / insist flow for flagged entries
 src/knowledge/dispute_logger.py  SQLite audit trail, search, CSV export
 demo/run_demo.py           end-to-end: sheet image -> OCR -> grading report
+src/learning/correction_store.py  teacher corrections as intent (SQLite), training history
+src/learning/correction_retriever.py  mechanism 1: similar past gradings as few-shot examples
+src/learning/score_calibrator.py  mechanism 2: isotonic bias correction per model + subject
+src/learning/ocr_fine_tuner.py  mechanism 3: TrOCR LoRA, promoted only if held-out CER drops
+src/learning/llm_finetune_export.py  mechanism 4: Colab/Kaggle notebook (8 GB GPU can't train)
 server/                    FastAPI: routes, background jobs, storage, what-if rescoring
 frontend/                  React 19 + Vite 8 + Tailwind 4 app (8 screens)
 setup_env.py               Phase 1 setup + verification

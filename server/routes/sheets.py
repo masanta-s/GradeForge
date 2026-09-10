@@ -95,6 +95,11 @@ def fix_line(exam_id: str, sheet_id: str, page: int, index: int, body: LineFix,
     line["text"] = body.text
     line["corrected"] = body.text != line["ocr_text"]
     services.storage.update_ocr(exam_id, sheet_id, meta)
+    if line["crop"]:  # (line image, corrected text) is a training pair for mechanism 3
+        services.corrections.add_ocr_correction(
+            exam_id=exam_id, sheet_id=sheet_id, writer_id=meta["student"], page=page, line_index=index,
+            image_path=str(services.storage.asset(exam_id, sheet_id, "lines", line["crop"])),
+            ocr_text=line["ocr_text"], corrected_text=body.text)
     return line
 
 
@@ -116,9 +121,14 @@ def grade_sheet(exam_id: str, sheet_id: str, body: GradeIn | None = None,
 
         job.report(0.05, "Matching answers to questions")
         segmentation = segment_answers(services.storage.load_pages(exam_id, sheet_id), key.question_ids)
-        engine = GradingEngine(key, subjective_grader=services.subjective,
-                               diagram_evaluator=services.diagram_evaluator, llm=services.llm,
-                               strictness=strictness)
+        subject, model = key.subject, services.settings["model"]
+        engine = GradingEngine(
+            key, subjective_grader=services.subjective, diagram_evaluator=services.diagram_evaluator,
+            llm=services.llm, strictness=strictness,
+            # learning mechanisms 1 and 2: the teacher's past gradings + this model's bias correction
+            examples_for=lambda q, answer: services.retriever.retrieve(q.text, answer, subject=subject, k=4),
+            calibrate=lambda quality: services.calibrator.calibrate(model, subject, quality),
+        )
         job.report(0.15, "Grading")
         paper = engine.grade_segmentation(segmentation)
         result = {**to_jsonable(paper), "student": meta["student"], "model": services.settings["model"],
@@ -164,4 +174,26 @@ def fix_marks(exam_id: str, sheet_id: str, question_id: str, body: MarksFix,
     result["total"] = sum(q["marks"] for q in result["questions"])
     result["percentage"] = 100 * result["total"] / result["max_total"] if result["max_total"] else 0.0
     services.storage.save_result(exam_id, sheet_id, result)
+    _record_grade_correction(services, exam_id, sheet_id, result, question, body)
     return question
+
+
+def _record_grade_correction(services: Services, exam_id: str, sheet_id: str, result: dict, question: dict,
+                             body: MarksFix) -> None:
+    """Keep the teacher's mark as intent for learning. Few-shot uses every written answer;
+    calibration needs a comparable model score, so only plain written questions carry one
+    (mixed and diagram totals combine parts that can't be separated from one number)."""
+    key = services.storage.get_key(exam_id)
+    if key is None or question["qtype"] == "mcq" or not question["answer_text"].strip():
+        return
+    entry = key.get(question["question_id"])
+    detail = question.get("detail") or {}
+    plain_written = question["qtype"] in ("short", "descriptive") and not question.get("diagram")
+    services.corrections.add_grade_correction(
+        exam_id=exam_id, sheet_id=sheet_id, question_id=question["question_id"],
+        subject=services.storage.get_exam(exam_id)["subject"], model=result.get("model", ""),
+        question_text=entry.text, model_answer=entry.model_answer, student_answer=question["answer_text"],
+        max_marks=question["max_marks"], ai_marks=question["ai_marks"], teacher_marks=body.marks,
+        ai_quality=detail.get("llm_quality") if plain_written else None,
+        strictness=result["strictness"], note=body.note, teacher_name=body.teacher_name,
+    )

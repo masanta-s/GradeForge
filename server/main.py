@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src import config  # noqa: F401  (redirects caches/temp; offline HuggingFace)
-from server.routes import exams, sheets, system
+from server.routes import exams, learning, sheets, system
 from server.services import Services
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
@@ -49,7 +49,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],  # Vite dev server
         allow_methods=["*"], allow_headers=["*"],
     )
-    for module in (system, exams, sheets):
+    for module in (system, exams, sheets, learning):
         app.include_router(module.router)
     if FRONTEND_DIST.is_dir():
         app.mount("/", SPAStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")

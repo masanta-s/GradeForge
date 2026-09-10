@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import {
-  AlertTriangle, BarChart3, CheckCircle2, FileUp, GraduationCap, Loader2, MessagesSquare, Settings, X,
+  AlertTriangle, BarChart3, Brain, CheckCircle2, FileUp, GraduationCap, Loader2, MessagesSquare, Settings, X,
 } from "lucide-react";
 import { lazy, Suspense, useRef, useState } from "react";
 import { NavLink, Outlet } from "react-router";
@@ -11,6 +11,7 @@ const NAV = [
   { to: "/", label: "Exams", icon: GraduationCap, end: true },
   { to: "/disputes", label: "Dispute log", icon: MessagesSquare },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/learning", label: "Learning", icon: Brain },
   { to: "/settings", label: "Models & settings", icon: Settings },
 ];
 

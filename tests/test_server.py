@@ -10,6 +10,7 @@ from server.services import Services
 from server.storage import Storage
 from src.grading.subjective_grader import SubjectiveGrader
 from src.knowledge.dispute_logger import DisputeLog
+from src.learning.correction_store import CorrectionStore
 from src.ocr.pipeline import OCRLine, PageOCR
 from tests.test_subjective_grader import BagOfWordsEmbedder
 
@@ -62,6 +63,7 @@ def client(tmp_path):
     services.llm = FakeLLM()
     services.subjective = SubjectiveGrader(embedder=BagOfWordsEmbedder())
     services.dispute_log = DisputeLog(tmp_path / "disputes.db")
+    services.corrections = CorrectionStore(tmp_path / "corrections.db")  # never the real learning data
     with TestClient(create_app(services)) as c:
         yield c
 

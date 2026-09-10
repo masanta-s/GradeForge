@@ -118,3 +118,16 @@ def make_diagram_page(kind: str = "cell", ruled: bool = True, skew: float = 0.0,
 @pytest.fixture
 def page_factory():
     return make_page
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_data_is_never_touched():
+    """Fail the run if any test writes to the teacher's real databases or settings in data/."""
+    from src import config
+
+    watched = [*config.DATA_DIR.glob("*.db"), config.DATA_DIR / "settings.json"]
+    before = {p: p.stat().st_mtime_ns for p in watched if p.exists()}
+    yield
+    changed = [p.name for p, mtime in before.items() if p.exists() and p.stat().st_mtime_ns != mtime]
+    created = [p.name for p in config.DATA_DIR.glob("*.db") if p not in before]
+    assert not changed and not created, f"tests modified real data: {changed + created}"

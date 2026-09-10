@@ -66,9 +66,11 @@ class OCRPipeline:
     @property
     def extractor(self):
         if self._extractor is None:  # lazy: loading TrOCR takes GPU memory and ~seconds
+            from src.learning.ocr_fine_tuner import active_adapter
             from src.ocr.text_extractor import TrOCRExtractor
 
-            self._extractor = TrOCRExtractor()
+            # The promoted fine-tune (learning mechanism 3), if any; otherwise base TrOCR.
+            self._extractor = TrOCRExtractor(adapter_dir=active_adapter())
         return self._extractor
 
     def run_image(self, image: np.ndarray, page_index: int = 0) -> PageOCR:

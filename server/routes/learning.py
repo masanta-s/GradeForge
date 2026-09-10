@@ -1,0 +1,99 @@
+"""The four learning mechanisms: status, TrOCR fine-tuning, and the LLM fine-tuning notebook."""
+from __future__ import annotations
+
+import json
+from collections import Counter
+
+import cv2
+import numpy as np
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+from server.deps import get_services, job_response
+from server.serialize import to_jsonable
+from server.services import Services
+from src import config
+
+router = APIRouter(prefix="/api/learning", tags=["learning"])
+
+
+class TrainIn(BaseModel):
+    writer: str | None = None  # one student's handwriting, or everyone's corrections
+
+
+class ExportIn(BaseModel):
+    consent: bool = False
+
+
+@router.get("/status")
+def status(services: Services = Depends(get_services)) -> dict:
+    from src.learning.llm_finetune_export import RECOMMENDED_CORRECTIONS
+    from src.learning.ocr_fine_tuner import ACTIVE_FILE, MIN_SAMPLES
+
+    grades = services.corrections.grade_corrections()
+    pairs = sorted({(c.model, c.subject) for c in grades if c.ai_quality is not None})
+    ocr = services.corrections.ocr_corrections()
+    active_file = config.TROCR_FINETUNED_DIR / ACTIVE_FILE
+    active = json.loads(active_file.read_text(encoding="utf-8")) if active_file.exists() else None
+    trainable = sum(c.teacher_quality is not None for c in grades)
+    reports = [services.calibrator.report(model, subject) for model, subject in pairs]
+    return {
+        "few_shot": {"active": bool(grades), "corrections": len(grades)},
+        "calibration": [to_jsonable(r) | {"needed": r.needed} for r in reports],
+        "ocr": {"corrections": len(ocr), "by_writer": dict(Counter(c.writer_id for c in ocr)),
+                "min_samples": MIN_SAMPLES, "can_train": len(ocr) >= MIN_SAMPLES,
+                "active_version": active["version"] if active else None,
+                "active_cer": active["cer"] if active else None},
+        "llm": {"examples": trainable, "recommended": RECOMMENDED_CORRECTIONS, "can_export": trainable > 0},
+        "history": services.corrections.training_history(),
+    }
+
+
+@router.post("/trocr/train")
+def train_trocr(body: TrainIn, services: Services = Depends(get_services)) -> dict:
+    from src.learning.ocr_fine_tuner import MIN_SAMPLES
+
+    corrections = services.corrections.ocr_corrections(body.writer)
+    if len(corrections) < MIN_SAMPLES:
+        raise HTTPException(status_code=409, detail=f"need {MIN_SAMPLES} corrected lines, have {len(corrections)}")
+
+    def work(job):
+        from src.learning.ocr_fine_tuner import train_trocr_lora
+        from src.models.ollama_probe import OllamaModelProbe
+
+        job.report(0.01, "Freeing the GPU")
+        services.reload_ocr()  # drop the in-memory TrOCR
+        try:
+            OllamaModelProbe(timeout=10).unload(services.settings["model"])
+        except Exception:
+            pass  # Ollama not running: nothing to unload
+        samples = []
+        for c in corrections:
+            image = cv2.imdecode(np.fromfile(c.image_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+            if image is not None:
+                samples.append((image, c.corrected_text))
+        result = train_trocr_lora(samples, progress=job.report)
+        services.corrections.log_training(
+            mechanism="trocr_lora", model="trocr-base-handwritten", version=result.version, metric_name="cer",
+            metric_before=result.baseline_cer, metric_after=result.tuned_cer, num_samples=len(samples),
+            promoted=result.promoted, notes=f"writer: {body.writer or 'all'}; baseline {result.baseline}")
+        if result.promoted:
+            services.reload_ocr()  # next OCR run loads the new adapter
+        return to_jsonable(result)
+
+    return job_response(services.jobs.submit("train_trocr", work))
+
+
+@router.post("/llm/export")
+def export_notebook(body: ExportIn, services: Services = Depends(get_services)) -> Response:
+    if not body.consent:
+        raise HTTPException(status_code=403, detail="exporting sends student answers to Colab/Kaggle: consent required")
+    from src.learning.llm_finetune_export import build_notebook
+
+    try:
+        notebook = build_notebook(services.corrections.grade_corrections())
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    return Response(json.dumps(notebook, indent=1, ensure_ascii=False), media_type="application/x-ipynb+json",
+                    headers={"Content-Disposition": 'attachment; filename="gradeforge_finetune.ipynb"'})

@@ -7,6 +7,7 @@ disagreement, text the segmenter couldn't place — so the review screen can say
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
@@ -89,12 +90,23 @@ class GradingEngine:
         diagram_evaluator: DiagramEvaluator | None = None,
         llm: CompletionFn | None = None,
         strictness: float = 50,
+        examples_for: Callable[[Question, str], list[GradedExample]] | None = None,
+        calibrate: Callable[[float], float] | None = None,
     ):
+        """`examples_for(question, answer)`: the teacher's past gradings of similar answers
+        (learning mechanism 1). `calibrate(quality)`: this model's bias correction (mechanism 2)."""
         self.answer_key = answer_key
         self.subjective = subjective_grader or SubjectiveGrader()
         self._diagram_evaluator = diagram_evaluator
         self.llm = llm
         self.strictness = strictness
+        self.examples_for = examples_for
+        self.calibrate = calibrate
+
+    def _examples(self, question: Question, answer: str, given: list[GradedExample] | None) -> list[GradedExample]:
+        if given is not None:
+            return given
+        return self.examples_for(question, answer) if self.examples_for and answer.strip() else []
 
     @property
     def diagram_evaluator(self) -> DiagramEvaluator:
@@ -136,7 +148,8 @@ class GradingEngine:
             return QuestionGrade(question.id, question.qtype, 0.0, 0.0, answer, "graded")
 
         written = replace(question, max_marks=question.written_marks)
-        result = self.subjective.grade(written, answer, self.strictness, llm=self.llm, examples=examples or [])
+        result = self.subjective.grade(written, answer, self.strictness, llm=self.llm,
+                                       examples=self._examples(question, answer, examples), calibrate=self.calibrate)
         reasons = [f"Check: {result.review_reason}"] if result.needs_review else []
         return QuestionGrade(question.id, question.qtype, result.marks, question.max_marks, answer, "graded",
                              feedback=result.feedback, review_reasons=reasons, detail=result)
@@ -152,8 +165,9 @@ class GradingEngine:
             text=f"{question.text}\nOptions: {options}\nCorrect option: {correct}\n"
                  f"Grade ONLY the student's justification of their choice.",
         )
-        justified = self.subjective.grade(justification_question, justification, self.strictness,
-                                          llm=self.llm, examples=examples or [])
+        justified = self.subjective.grade(justification_question, justification, self.strictness, llm=self.llm,
+                                          examples=self._examples(question, justification, examples),
+                                          calibrate=self.calibrate)
 
         reasons = _mcq_reasons(choice) if option_part else ["could not find which option was chosen"]
         if justified.needs_review:
