@@ -62,5 +62,9 @@ class JobRunner:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
+    def busy(self, *kinds: str) -> bool:
+        """Is a job of one of these kinds queued or running?"""
+        return any(j.kind in kinds and j.status in ("queued", "running") for j in list(self._jobs.values()))
+
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

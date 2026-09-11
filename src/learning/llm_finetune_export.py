@@ -8,8 +8,9 @@ Privacy: the notebook carries student answers off this machine, so the API requi
 consent. Only (prompt, teacher score) pairs are included: no student names, sheet ids or exams.
 Each prompt is built exactly as the grader builds it, so the model is trained on what it sees.
 
-This produces a starting template: it can't be executed from here, so the base-model repo id
-and Unsloth calls must be checked on first run (noted at the top of the notebook).
+The base-model repo comes from the HF resolver and the method (QLoRA or 16-bit LoRA) from the
+training router. The notebook can't be executed from here, so its model-loading cell stops with
+a clear message if the installed Unsloth can't load the architecture.
 """
 from __future__ import annotations
 
@@ -20,7 +21,6 @@ from src.grading.subjective_grader import build_messages
 from src.learning.correction_store import GradeCorrection
 
 RECOMMENDED_CORRECTIONS = 200
-BASE_MODEL = "google/gemma-4-E4B-it"  # verify on huggingface.co before running
 
 
 def training_examples(corrections: list[GradeCorrection]) -> list[dict]:
@@ -45,26 +45,30 @@ def _cell(kind: str, source: str) -> dict:
     return cell
 
 
-def build_notebook(corrections: list[GradeCorrection], *, base_model: str = BASE_MODEL,
-                   output_name: str = "gradeforge-grader") -> dict:
+def build_notebook(corrections: list[GradeCorrection], *, base_model: str, load_in_4bit: bool = True,
+                   ollama_base: str = "", output_name: str = "gradeforge-grader") -> dict:
+    """`base_model`: the resolved HF repo; `load_in_4bit`: QLoRA (True) or 16-bit LoRA (False);
+    `ollama_base`: the Ollama model this fine-tunes, whose chat template the import reuses."""
     examples = training_examples(corrections)
     if not examples:
         raise ValueError("no written-answer corrections to train on yet")
     warning = ("" if len(examples) >= RECOMMENDED_CORRECTIONS else
                f"\n\n> **Only {len(examples)} examples.** Fine-tuning is recommended from "
                f"{RECOMMENDED_CORRECTIONS}; until then, few-shot examples and calibration do the learning.")
+    method = "QLoRA (4-bit)" if load_in_4bit else "LoRA (16-bit)"
     data = json.dumps(examples, ensure_ascii=False)
     cells = [
         _cell("markdown", f"""
 # GradeForge: fine-tune the grading model on your corrections
 
-Runs on a free **Colab or Kaggle T4 GPU**. It trains LoRA adapters on `{base_model}` with
-Unsloth, exports a Q4 GGUF, and you import that into Ollama on the school computer.
+Runs on a free **Colab or Kaggle T4 GPU**. It trains {method} adapters on `{base_model}`
+(the original weights of `{ollama_base or base_model}`) with Unsloth, exports a Q4 GGUF, and you
+import that into Ollama from GradeForge's Learning page.
 
 * **{len(examples)} training examples**, each: the grader's prompt → the teacher's score.
   No student names, sheet ids or exam names are included.
-* **Check before running:** the base-model repo id and the Unsloth API (this notebook was
-  generated, not run). Use the same chat template at inference as in training.{warning}
+* This notebook was generated, not run: the model-loading cell stops with a clear message if
+  this Unsloth can't load the model yet.{warning}
 """),
         _cell("code", "!pip install -q unsloth"),
         _cell("code", f"""
@@ -72,7 +76,12 @@ import json
 from unsloth import FastLanguageModel
 
 BASE_MODEL = "{base_model}"
-model, tokenizer = FastLanguageModel.from_pretrained(BASE_MODEL, max_seq_length=2048, load_in_4bit=True)
+try:
+    model, tokenizer = FastLanguageModel.from_pretrained(BASE_MODEL, max_seq_length=2048,
+                                                         load_in_4bit={load_in_4bit})
+except Exception as e:
+    raise SystemExit(f"Unsloth can't load {{BASE_MODEL}} yet ({{e}}). Try a newer Unsloth, "
+                     "or fine-tune a different model.")
 model = FastLanguageModel.get_peft_model(
     model, r=16, lora_alpha=16, lora_dropout=0,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
@@ -115,9 +124,11 @@ except ImportError:
         _cell("markdown", f"""
 ## Import into Ollama (on the school computer)
 
-Put the `.gguf` next to a file called `Modelfile` containing `FROM ./<file>.gguf`, then run
-`ollama create {output_name} -f Modelfile`. In GradeForge, choose **{output_name}** under
-*Models & settings*, and re-grade a few already-corrected sheets to compare it with the base model.
+In GradeForge, open **Learning → Fine-tuning the grading model → Import trained model**, give
+the path of the downloaded `.gguf`, and keep **{ollama_base or 'the base model'}** as the base
+(its chat template is reused, so the fine-tune is prompted exactly as it was trained). Then
+choose the new model under *Models & settings*, run its check, and re-grade a few
+already-corrected sheets to compare it with the base model.
 """),
     ]
     return {"cells": cells, "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3"},

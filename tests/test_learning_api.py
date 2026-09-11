@@ -1,6 +1,4 @@
 """Learning through the API: corrections are captured from normal teacher actions."""
-import json
-
 import cv2
 import numpy as np
 import pytest
@@ -91,18 +89,6 @@ def test_trocr_training_job_logs_and_reports(api, monkeypatch, tmp_path):
     assert (history["metric_before"], history["metric_after"], history["promoted"]) == (0.23, 0.02, True)
 
 
-def test_notebook_export_requires_consent_and_data(api):
+def test_notebook_export_requires_consent(api):
+    # checked before anything else runs; the export itself is tested in test_models_api
     assert api.post("/api/learning/llm/export", json={"consent": False}).status_code == 403
-    assert api.post("/api/learning/llm/export", json={"consent": True}).status_code == 409  # nothing yet
-    api.app.state.services.corrections.add_grade_correction(
-        exam_id="e", sheet_id="riya-sharma-1a2b3c", question_id="2", subject="Biology", model="qwen3.5:9b",
-        question_text="What is photosynthesis?", model_answer="Plants make glucose using sunlight.",
-        student_answer="plants make food", max_marks=4, ai_marks=3, teacher_marks=1, ai_quality=0.7,
-        strictness=50, note="too vague", teacher_name="Mrs. Iyer")
-    response = api.post("/api/learning/llm/export", json={"consent": True})
-    assert response.status_code == 200 and "attachment" in response.headers["content-disposition"]
-    notebook = json.loads(response.text)
-    text = json.dumps(notebook)
-    assert notebook["nbformat"] == 4 and "plants make food" in text and "too vague" in text
-    assert "riya" not in text.lower() and "Mrs. Iyer" not in text  # no student or teacher identity
-    assert "Only 1 examples" in text  # below the recommended 200

@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "updated": "2026-09-11",
+  "about": "Patches for the few cases GradeForge's automatic model resolution gets wrong or cannot know. This is not a list of supported models: any model Ollama serves is identified and resolved automatically.",
+  "families": {
+    "qwen35": {
+      "hf_search": ["qwen3.5"],
+      "qlora": false,
+      "qlora_note": "Unsloth advises against 4-bit QLoRA for Qwen 3.5 (larger-than-usual quantization error); use 16-bit LoRA."
+    },
+    "qwen35moe": {
+      "hf_search": ["qwen3.5"],
+      "qlora": false,
+      "qlora_note": "Unsloth advises against 4-bit QLoRA for Qwen 3.5 (larger-than-usual quantization error); use 16-bit LoRA."
+    }
+  },
+  "models": {},
+  "training_vram_gb": {
+    "google/gemma-4-E2B-it": {"qlora": 8, "lora": 10, "source": "Unsloth docs, Sept 2026"},
+    "google/gemma-4-E4B-it": {"qlora": 10, "lora": 17, "source": "Unsloth docs, Sept 2026"},
+    "google/gemma-4-26B-A4B-it": {"qlora": 22, "lora": 41, "source": "Unsloth docs, Sept 2026"},
+    "google/gemma-4-31B-it": {"qlora": 22, "lora": 41, "source": "Unsloth docs, Sept 2026"},
+    "Qwen/Qwen3.5-4B": {"lora": 10, "source": "Unsloth docs, Sept 2026"},
+    "Qwen/Qwen3.5-9B": {"lora": 22, "source": "Unsloth docs, Sept 2026"}
+  }
+}

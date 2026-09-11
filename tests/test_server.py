@@ -11,6 +11,8 @@ from server.storage import Storage
 from src.grading.subjective_grader import SubjectiveGrader
 from src.knowledge.dispute_logger import DisputeLog
 from src.learning.correction_store import CorrectionStore
+from src.models.cache import ModelCache
+from src.models.secret_store import MemorySecretStore
 from src.ocr.pipeline import OCRLine, PageOCR
 from tests.test_subjective_grader import BagOfWordsEmbedder
 
@@ -58,7 +60,8 @@ class FakeLLM:
 
 @pytest.fixture
 def client(tmp_path):
-    services = Services(storage=Storage(tmp_path / "exams"), settings_path=tmp_path / "settings.json")
+    services = Services(storage=Storage(tmp_path / "exams"), settings_path=tmp_path / "settings.json",
+                        model_cache=ModelCache(tmp_path / "model_cache.db"), secrets=MemorySecretStore())
     services.ocr = FakeOCR()
     services.llm = FakeLLM()
     services.subjective = SubjectiveGrader(embedder=BagOfWordsEmbedder())

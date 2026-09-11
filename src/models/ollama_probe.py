@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
@@ -78,8 +79,20 @@ class OllamaModelProbe:
     def list_models(self) -> list[str]:
         return [m["name"] for m in self._request("GET", "/api/tags").get("models", [])]
 
+    def digests(self) -> dict[str, str]:
+        """Model name -> content digest; changes when a model is re-pulled or re-created."""
+        return {m["name"]: m.get("digest", "") for m in self._request("GET", "/api/tags").get("models", [])}
+
+    def show(self, model_name: str) -> dict:
+        return self._request("POST", "/api/show", json={"model": model_name})
+
+    def remove(self, model_name: str) -> None:
+        response = self._client.request("DELETE", "/api/delete", json={"model": model_name})
+        if response.status_code != 404:  # already gone is fine
+            response.raise_for_status()
+
     def probe(self, model_name: str) -> ModelIdentity:
-        data = self._request("POST", "/api/show", json={"model": model_name})
+        data = self.show(model_name)
         details = data.get("details", {})
         info = data.get("model_info", {})
         arch = info.get("general.architecture") or details.get("family", "")
@@ -149,23 +162,24 @@ CREATE TABLE IF NOT EXISTS vram_measurements (
 """
 
 
-def _connect() -> sqlite3.Connection:
-    config.ensure_dirs()
-    conn = sqlite3.connect(config.RESOLUTION_CACHE_DB)
+def _connect(path: Path | None = None) -> sqlite3.Connection:
+    path = Path(path or config.RESOLUTION_CACHE_DB)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.execute(_SCHEMA)
     return conn
 
 
-def save_measurement(m: VRAMMeasurement) -> None:
-    with closing(_connect()) as conn, conn:
+def save_measurement(m: VRAMMeasurement, path: Path | None = None) -> None:
+    with closing(_connect(path)) as conn, conn:
         conn.execute(
             "INSERT OR REPLACE INTO vram_measurements VALUES (?, ?, ?, ?, ?)",
             (m.model, m.num_ctx, m.size_bytes, m.size_vram_bytes, m.measured_at),
         )
 
 
-def load_measurement(model: str, num_ctx: int) -> VRAMMeasurement | None:
-    with closing(_connect()) as conn:
+def load_measurement(model: str, num_ctx: int, path: Path | None = None) -> VRAMMeasurement | None:
+    with closing(_connect(path)) as conn:
         row = conn.execute(
             "SELECT model, num_ctx, size_bytes, size_vram_bytes, measured_at "
             "FROM vram_measurements WHERE model = ? AND num_ctx = ?",

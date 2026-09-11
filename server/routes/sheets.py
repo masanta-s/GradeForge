@@ -121,7 +121,7 @@ def grade_sheet(exam_id: str, sheet_id: str, body: GradeIn | None = None,
 
         job.report(0.05, "Matching answers to questions")
         segmentation = segment_answers(services.storage.load_pages(exam_id, sheet_id), key.question_ids)
-        subject, model = key.subject, services.settings["model"]
+        subject, model = key.subject, services.model_name
         engine = GradingEngine(
             key, subjective_grader=services.subjective, diagram_evaluator=services.diagram_evaluator,
             llm=services.llm, strictness=strictness,
@@ -131,7 +131,7 @@ def grade_sheet(exam_id: str, sheet_id: str, body: GradeIn | None = None,
         )
         job.report(0.15, "Grading")
         paper = engine.grade_segmentation(segmentation)
-        result = {**to_jsonable(paper), "student": meta["student"], "model": services.settings["model"],
+        result = {**to_jsonable(paper), "student": meta["student"], "model": model,
                   "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         services.storage.save_result(exam_id, sheet_id, result)
         return {"total": result["total"], "max_total": result["max_total"]}
