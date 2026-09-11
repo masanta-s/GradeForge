@@ -1,7 +1,12 @@
 """The permanent asset: teacher corrections, stored as intent, never as model weights.
 
-    grade_corrections   the teacher changed an AI mark (question, answer, AI score, teacher score, why)
+    grade_corrections   teacher-checked marks: kind "changed" (the teacher overrode the AI) or
+                        "confirmed" (the teacher approved the sheet and kept the AI's mark).
+                        Without confirmations every measurement would only see the AI's
+                        mistakes, and calibration and training would learn only from them.
     ocr_corrections     the teacher fixed a line TrOCR misread (line image + corrected text)
+    sheet_reviews       one row per approved sheet: how many AI marks the teacher changed
+    benchmark_runs      agreement with the teacher measured on held-out answers, per model setup
     training_history    every fine-tune attempt, with before/after metrics, promoted or not
 
 Every learning mechanism reads from here, so switching models never loses what was learned.
@@ -41,7 +46,34 @@ CREATE TABLE IF NOT EXISTS grade_corrections (
     strictness      REAL NOT NULL,
     note            TEXT NOT NULL,
     teacher_name    TEXT NOT NULL,
+    kind            TEXT NOT NULL DEFAULT 'changed',
     UNIQUE (sheet_id, question_id)
+);
+CREATE TABLE IF NOT EXISTS sheet_reviews (
+    sheet_id        TEXT PRIMARY KEY,
+    exam_id         TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    teacher_name    TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    judged          INTEGER NOT NULL,
+    changed         INTEGER NOT NULL,
+    abs_diff        REAL NOT NULL,
+    max_total       REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS benchmark_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at      TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    setup           TEXT NOT NULL,
+    n               INTEGER NOT NULL,
+    exact           REAL NOT NULL,
+    close           REAL NOT NULL,
+    mae             REAL NOT NULL,
+    mae_pct         REAL NOT NULL,
+    bias            REAL NOT NULL,
+    holdout_total   INTEGER NOT NULL,
+    trigger         TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ocr_corrections (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +136,7 @@ class GradeCorrection:
     strictness: float
     note: str
     teacher_name: str
+    kind: str = "changed"   # changed | confirmed
 
 
 @dataclass(frozen=True)
@@ -125,6 +158,9 @@ class CorrectionStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn, conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(grade_corrections)")}
+            if columns and "kind" not in columns:  # databases from before confirmations existed
+                conn.execute("ALTER TABLE grade_corrections ADD COLUMN kind TEXT NOT NULL DEFAULT 'changed'")
             conn.executescript(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
@@ -134,17 +170,18 @@ class CorrectionStore:
     def add_grade_correction(self, *, exam_id: str, sheet_id: str, question_id: str, subject: str, model: str,
                              question_text: str, model_answer: str, student_answer: str, max_marks: float,
                              ai_marks: float, teacher_marks: float, ai_quality: float | None, strictness: float,
-                             note: str = "", teacher_name: str = "") -> None:
-        """Re-correcting the same question on the same sheet replaces the earlier correction."""
+                             note: str = "", teacher_name: str = "", kind: str = "changed") -> None:
+        """Re-checking the same question on the same sheet replaces the earlier entry."""
         teacher_quality = implied_quality(teacher_marks, max_marks, strictness) if ai_quality is not None else None
         with closing(self._connect()) as conn, conn:
             conn.execute(
                 "INSERT OR REPLACE INTO grade_corrections (created_at, exam_id, sheet_id, question_id, subject, model,"
                 " question_text, model_answer, student_answer, max_marks, ai_marks, teacher_marks, ai_quality,"
-                " teacher_quality, strictness, note, teacher_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " teacher_quality, strictness, note, teacher_name, kind)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (_now(), exam_id, sheet_id, question_id, subject, model, question_text, model_answer,
                  student_answer, max_marks, ai_marks, teacher_marks, ai_quality, teacher_quality, strictness,
-                 note, teacher_name),
+                 note, teacher_name, kind),
             )
 
     def grade_corrections(self, *, subject: str | None = None, model: str | None = None) -> list[GradeCorrection]:
@@ -156,9 +193,37 @@ class CorrectionStore:
             clauses.append("model = ?")
             params.append(model)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        columns = ", ".join(GradeCorrection.__dataclass_fields__)
         with closing(self._connect()) as conn:
-            rows = conn.execute(f"SELECT * FROM grade_corrections {where} ORDER BY id", params).fetchall()
+            rows = conn.execute(f"SELECT {columns} FROM grade_corrections {where} ORDER BY id", params).fetchall()
         return [GradeCorrection(*row) for row in rows]
+
+    # --- sheet reviews (the day-by-day agreement measure) --------------------------------
+    def add_sheet_review(self, *, sheet_id: str, exam_id: str, teacher_name: str, model: str, judged: int,
+                         changed: int, abs_diff: float, max_total: float) -> None:
+        with closing(self._connect()) as conn, conn:
+            conn.execute("INSERT OR REPLACE INTO sheet_reviews VALUES (?,?,?,?,?,?,?,?,?)",
+                         (sheet_id, exam_id, _now(), teacher_name, model, judged, changed, abs_diff, max_total))
+
+    def sheet_reviews(self) -> list[dict]:
+        with closing(self._connect()) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute("SELECT * FROM sheet_reviews ORDER BY created_at")]
+
+    # --- benchmark runs ------------------------------------------------------------------
+    def add_benchmark_run(self, *, label: str, model: str, setup: str, n: int, exact: float, close: float,
+                          mae: float, mae_pct: float, bias: float, holdout_total: int, trigger: str) -> int:
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                "INSERT INTO benchmark_runs (created_at, label, model, setup, n, exact, close, mae, mae_pct, bias,"
+                " holdout_total, trigger) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (_now(), label, model, setup, n, exact, close, mae, mae_pct, bias, holdout_total, trigger))
+            return cursor.lastrowid
+
+    def benchmark_runs(self) -> list[dict]:
+        with closing(self._connect()) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute("SELECT * FROM benchmark_runs ORDER BY id")]
 
     # --- OCR ---------------------------------------------------------------------------
     def add_ocr_correction(self, *, exam_id: str, sheet_id: str, writer_id: str, page: int, line_index: int,

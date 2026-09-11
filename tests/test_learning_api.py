@@ -53,7 +53,7 @@ def test_teacher_actions_feed_learning(api):
     assert grade.ai_quality == 0.6 and grade.teacher_quality is not None  # plain written question
 
     status = api.get("/api/learning/status").json()
-    assert status["few_shot"] == {"active": True, "corrections": 1}
+    assert status["few_shot"] == {"active": True, "corrections": 1, "changed": 1, "confirmed": 0}
     assert status["calibration"][0]["corrections"] == 1 and status["calibration"][0]["needed"] == 14
     assert status["ocr"]["by_writer"] == {"Riya": 1} and not status["ocr"]["can_train"]
     assert status["llm"]["examples"] == 1
@@ -87,6 +87,58 @@ def test_trocr_training_job_logs_and_reports(api, monkeypatch, tmp_path):
     assert seen["n"] == 25 and result["promoted"]
     [history] = api.get("/api/learning/status").json()["history"]
     assert (history["metric_before"], history["metric_after"], history["promoted"]) == (0.23, 0.02, True)
+
+
+def test_approving_a_sheet_confirms_the_marks_left_alone(api):
+    base, sheet = _graded_sheet(api)
+    wait(api, api.post(f"{base}/sheets/{sheet}/grade", json={"strictness": 50}).json()["job_id"])
+    assert api.post(f"{base}/sheets/{sheet}/approve", json={"teacher_name": " "}).status_code == 422
+
+    review = api.post(f"{base}/sheets/{sheet}/approve", json={"teacher_name": "Mrs. Iyer"}).json()
+    assert review == {"judged": 1, "changed": 0, "accepted_pct": 100.0}   # Q1 is an MCQ: marked by rule
+    [confirmed] = api.app.state.services.corrections.grade_corrections()
+    assert (confirmed.kind, confirmed.question_id, confirmed.teacher_marks) == ("confirmed", "2", confirmed.ai_marks)
+
+    # a later change on the approved sheet replaces the confirmation
+    api.put(f"{base}/sheets/{sheet}/questions/2", json={"marks": 1.0, "note": "vague", "teacher_name": "Mrs. Iyer"})
+    review = api.post(f"{base}/sheets/{sheet}/approve", json={"teacher_name": "Mrs. Iyer"}).json()
+    assert review["changed"] == 1 and review["accepted_pct"] == 0.0
+    [changed] = api.app.state.services.corrections.grade_corrections()
+    assert changed.kind == "changed" and changed.teacher_marks == 1.0
+
+    progress = api.get("/api/learning/progress").json()
+    assert progress["approved_sheets"] == 1 and progress["weekly"][0]["accepted_pct"] == 0.0
+    assert progress["checked"] == {"total": 1, "changed": 1, "confirmed": 0}
+
+
+def _held_out_pool(store, n=40):
+    from src.learning.evaluation import split_of
+
+    for i in range(n):
+        store.add_grade_correction(
+            exam_id="e", sheet_id=f"sheet-{i}", question_id="2", subject="Biology", model="qwen3.5:9b",
+            question_text="What is photosynthesis?", model_answer="Plants use sunlight to make glucose and oxygen.",
+            student_answer="Plants use sunlight to make glucose", max_marks=4, ai_marks=3,
+            teacher_marks=2.5 if i % 2 else 3.5, ai_quality=0.6, strictness=50)
+    return [c for c in store.grade_corrections() if split_of(c) == "holdout"]
+
+
+def test_benchmark_measures_the_model_alone_and_with_what_it_learned(api):
+    assert api.post("/api/learning/benchmark", json={}).status_code == 409   # nothing held out yet
+    held_out = _held_out_pool(api.app.state.services.corrections)
+    assert held_out
+    runs = wait(api, api.post("/api/learning/benchmark", json={}).json()["job_id"])
+    assert [r["setup"] for r in runs] == ["alone", "learned"]
+    assert all(r["n"] == len(held_out) for r in runs)
+    alone = runs[0]
+    assert 0 <= alone["exact"] <= 1 and alone["mae"] >= 0
+
+    progress = api.get("/api/learning/progress").json()
+    assert [b["setup"] for b in progress["benchmarks"]] == ["alone", "learned"]
+    assert progress["holdout"]["total"] == len(held_out)
+    csv = api.get("/api/learning/progress.csv")
+    assert csv.status_code == 200 and "held-out test" in csv.text
+    assert api.post("/api/learning/benchmark", json={"setups": ["magic"]}).status_code == 422
 
 
 def test_notebook_export_requires_consent(api):

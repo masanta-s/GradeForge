@@ -66,8 +66,10 @@ class CorrectionRetriever:
 
     def retrieve(self, question_text: str, answer: str, *, subject: str | None = None, k: int = 4,
                  min_similarity: float = 0.5, exclude_sheet: str | None = None,
-                 _retried: bool = False) -> list[GradedExample]:
-        corrections = [c for c in self.store.grade_corrections(subject=subject) if c.sheet_id != exclude_sheet]
+                 exclude_ids: frozenset[int] = frozenset(), _retried: bool = False) -> list[GradedExample]:
+        """`exclude_ids`: corrections that must not be shown (the held-out answers being measured)."""
+        corrections = [c for c in self.store.grade_corrections(subject=subject)
+                       if c.sheet_id != exclude_sheet and c.id not in exclude_ids]
         if not corrections or not answer.strip():
             return []
         self.sync()
@@ -87,7 +89,7 @@ class CorrectionRetriever:
                 return []
             self._forget_vectors()
             return self.retrieve(question_text, answer, subject=subject, k=k, min_similarity=min_similarity,
-                                 exclude_sheet=exclude_sheet, _retried=True)
+                                 exclude_sheet=exclude_sheet, exclude_ids=exclude_ids, _retried=True)
         scores = np.stack(vectors) @ query
         best = [i for i in np.argsort(-scores)[:k] if scores[i] >= min_similarity]
         return [self._example(pool[i]) for i in best]

@@ -88,20 +88,41 @@ def test_gemma_e4b_is_trainable_via_colab_not_locally(overrides):
     plan = TrainingRouter(LAPTOP, overrides).plan("gemma4:e4b", "gemma4", supported("google/gemma-4-E4B-it", "gemma4"),
                                                   7_996_157_674, corrections=247)
     assert plan.estimate.method == "qlora" and plan.estimate.vram_gb == 10
-    local, colab, kaggle = plan.options
+    local, stream, colab, kaggle = plan.options
     assert not local.available and "QLoRA (4-bit) needs ~10 GB; this GPU has 8 GB" in local.reason
+    assert not stream.available and "isn't verified for gemma4" in stream.reason   # only verified architectures
     assert colab.available and kaggle.available
     assert plan.recommended == "colab" and plan.where == "Colab/Kaggle export" and plan.enough_corrections
     assert assign_tier(_passed(), plan).level == "green"
 
 
-def test_qwen_9b_is_inference_only_on_free_hardware(overrides):
+def test_qwen_9b_trains_on_this_laptop_by_streaming_layers(overrides):
     plan = TrainingRouter(LAPTOP, overrides).plan("qwen3.5:9b", "qwen35", supported("Qwen/Qwen3.5-9B"),
                                                   9_653_104_368, corrections=12)
     assert plan.estimate.method == "lora" and plan.estimate.vram_gb == 22     # QLoRA not advised for Qwen 3.5
-    assert plan.recommended is None and not plan.enough_corrections
-    assert "~22 GB" in plan.blocked_reason and "15 GB per GPU" in plan.blocked_reason
-    assert "QLoRA" in plan.blocked_reason
+    local, stream, colab, kaggle = plan.options
+    assert not local.available and not colab.available                     # 22 GB won't fit one GPU here
+    assert stream.available and "private" in stream.reason and "18 GB original weights" in stream.reason
+    assert kaggle.available and "split across both T4s" in kaggle.reason     # 2x 15 GB with the model split
+    assert plan.recommended == "stream" and not plan.enough_corrections      # private before cloud
+    assert assign_tier(_passed(), plan).level == "green"
+
+
+def test_streaming_needs_disk_for_the_weights_and_a_merged_copy(overrides):
+    small_disk = Hardware("RTX 4060 Laptop", 8.0, 30.0, train_env=False)
+    stream = TrainingRouter(small_disk, overrides).plan("qwen3.5:9b", "qwen35", supported("Qwen/Qwen3.5-9B"),
+                                                        9_653_104_368, 0).options[1]
+    assert not stream.available and "GB free disk" in stream.reason
+    tiny_gpu = Hardware("GTX 1650", 4.0, 500.0, train_env=False)
+    stream = TrainingRouter(tiny_gpu, overrides).plan("qwen3.5:9b", "qwen35", supported("Qwen/Qwen3.5-9B"),
+                                                      9_653_104_368, 0).options[1]
+    assert not stream.available and "6 GB" in stream.reason
+
+
+def test_models_too_big_for_every_route_explain_why(overrides):
+    huge = supported("org/Huge-70B", "llama")
+    plan = TrainingRouter(LAPTOP, overrides).plan("huge:70b", "llama", huge, 70_000_000_000, 0)
+    assert plan.recommended is None and "15 GB per GPU" in plan.blocked_reason
     tier = assign_tier(_passed(), plan)
     assert tier.level == "yellow" and "3 of 4 learning mechanisms active" in tier.reason
 

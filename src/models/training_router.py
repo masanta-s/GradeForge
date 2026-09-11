@@ -24,7 +24,17 @@ from src.models.override_registry import Overrides
 FREE_TIER_GB = 15
 LOCAL_DISK_GB = 60
 VRAM_MARGIN_GB = 0.5
+STREAM_MIN_VRAM_GB = 6.0      # one streamed layer + a 4k-token chunk peaked at 5.8 GiB (measured)
+# Measured on the RTX 4060 Laptop: ~0.38 s per Qwen3.5-9B layer per 4096 tokens, forward+backward
+# with recomputation, i.e. ~0.31 ms per token per billion parameters; +20% for loading layers.
+_STREAM_MS_PER_TOKEN_PER_B = 0.31 * 1.2
+_TOKENS_PER_ANSWER, _EPOCHS = 600, 3
 METHOD_LABEL = {"qlora": "QLoRA (4-bit)", "lora": "LoRA (16-bit)"}
+
+
+def stream_minutes(parameter_count: int | None, answers: int) -> float:
+    billions = (parameter_count or 0) / 1e9
+    return answers * _TOKENS_PER_ANSWER * _EPOCHS * _STREAM_MS_PER_TOKEN_PER_B * billions / 1000 / 60
 
 
 @dataclass(frozen=True)
@@ -99,8 +109,8 @@ class TrainingPlan:
 
     @property
     def where(self) -> str | None:
-        return {"local": "local", "colab": "Colab/Kaggle export", "kaggle": "Colab/Kaggle export"}.get(
-            self.recommended or "")
+        return {"local": "local", "stream": "this computer, streamed", "colab": "Colab/Kaggle export",
+                "kaggle": "Colab/Kaggle export"}.get(self.recommended or "")
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -126,13 +136,36 @@ class TrainingRouter:
             return RouteOption("local", "This computer", True, f"{est.label}, ~{est.vram_gb:g} GB of {hw.vram_gb:g} GB")
         return RouteOption("local", "This computer", False, reason)
 
+    def _stream(self, est: TrainingEstimate, model_type: str | None, parameter_count: int | None) -> RouteOption:
+        """Layers streamed through this GPU one at a time: slow, but private, and any model size."""
+        from src.learning.lora_stream_trainer import SUPPORTED_MODEL_TYPES
+
+        label = "This computer (layers streamed through the GPU)"
+        hw = self.hardware
+        weights_gb = (parameter_count or 0) * 2 / 2**30
+        if model_type not in SUPPORTED_MODEL_TYPES:
+            return RouteOption("stream", label, False, f"streamed training isn't verified for {model_type} yet")
+        if hw.vram_gb < STREAM_MIN_VRAM_GB:
+            return RouteOption("stream", label, False, f"needs a GPU with {STREAM_MIN_VRAM_GB:g} GB; this one has {hw.vram_gb:g}")
+        needed = 2 * weights_gb + 5   # original weights + one merged copy, before Ollama imports it
+        if hw.disk_free_gb < needed:
+            return RouteOption("stream", label, False, f"needs ~{needed:.0f} GB free disk; {hw.disk_free_gb:g} GB free")
+        minutes = stream_minutes(parameter_count, answers=200)
+        return RouteOption("stream", label, True, f"LoRA (16-bit), private, ~{minutes:.0f} min per 200 checked answers "
+                                                  f"(estimate); first needs the {weights_gb:.0f} GB original weights")
+
     def _free_tier(self, est: TrainingEstimate, target: str) -> RouteOption:
-        label = {"colab": "Google Colab (free T4, 15 GB)", "kaggle": "Kaggle (free T4, 15 GB per GPU)"}[target]
-        if est.vram_gb > FREE_TIER_GB:
-            return RouteOption(target, label, False, f"needs ~{est.vram_gb:g} GB on one GPU; free T4s have 15 GB")
-        detail = ("free, needs a Google login, sessions up to ~12 h" if target == "colab"
-                  else "free, 30 h a week; its two T4s are separate 15 GB GPUs")
-        return RouteOption(target, label, True, f"{est.label} ~{est.vram_gb:g} GB: {detail}")
+        label = {"colab": "Google Colab (free T4, 15 GB)", "kaggle": "Kaggle (free 2x T4, 15 GB each)"}[target]
+        if est.vram_gb <= FREE_TIER_GB:
+            detail = ("free, needs a Google login, sessions up to ~12 h" if target == "colab"
+                      else "free, 30 h a week")
+            return RouteOption(target, label, True, f"{est.label} ~{est.vram_gb:g} GB: {detail}")
+        if target == "kaggle" and est.method == "lora" and est.vram_gb <= 2 * FREE_TIER_GB - 2:
+            # Kaggle's two T4s are separate GPUs, but the model's layers can be split across them.
+            return RouteOption(target, label, True, f"{est.label} ~{est.vram_gb:g} GB split across both T4s "
+                                                    "(fp16; slower than one big GPU); free, 30 h a week")
+        where = "one GPU; free T4s have 15 GB" if target == "colab" else "two 15 GB T4s even when split"
+        return RouteOption(target, label, False, f"needs ~{est.vram_gb:g} GB: more than {where}")
 
     def plan(self, model: str, family: str, trainability: TrainabilityResult | None,
              parameter_count: int | None, corrections: int) -> TrainingPlan:
@@ -153,7 +186,9 @@ class TrainingRouter:
             return TrainingPlan(model, repo, None, (), None, corrections, enough,
                                 "LLM weight fine-tuning unavailable: the model's size is unknown.")
 
-        options = (self._local(estimate), self._free_tier(estimate, "colab"), self._free_tier(estimate, "kaggle"))
+        # Private routes first: student data only leaves the computer when nothing local works.
+        options = (self._local(estimate), self._stream(estimate, trainability.model_type, parameter_count),
+                   self._free_tier(estimate, "colab"), self._free_tier(estimate, "kaggle"))
         recommended = next((o.target for o in options if o.available), None)
         blocked = None
         if recommended is None:

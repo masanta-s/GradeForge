@@ -162,9 +162,14 @@ def modelfile_directives(modelfile: str) -> list[str]:
     return kept
 
 
-def _next_version(folder: Path) -> str:
+def next_version(folder: Path) -> str:
     existing = [int(p.name[1:]) for p in folder.glob("v*") if p.name[1:].isdigit()] if folder.exists() else []
     return f"v{max(existing, default=0) + 1}"
+
+
+def tuned_name(base_model: str) -> str:
+    """The Ollama name of GradeForge's fine-tunes of a base model: qwen3.5:9b -> gradeforge-qwen3-5-9b."""
+    return "gradeforge-" + re.sub(r"[^a-z0-9]+", "-", base_model.lower()).strip("-")
 
 
 def _ollama_cli() -> str:
@@ -194,7 +199,7 @@ def import_gguf(gguf_path: Path, name: str, base_model: str, *, root: Path = con
 
     probe = probe or OllamaModelProbe()
     directives = modelfile_directives(probe.show(base_model).get("modelfile", ""))
-    version = _next_version(root / name)
+    version = next_version(root / name)
     folder = root / name / version
     folder.mkdir(parents=True)
     report(0.05, f"Copying {gguf_path.name}")
@@ -212,3 +217,32 @@ def import_gguf(gguf_path: Path, name: str, base_model: str, *, root: Path = con
             "created_at": time.time()}
     (folder / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return meta | {"path": str(folder)}
+
+
+def import_safetensors(model_dir: Path, name: str, base_model: str, version: str, *,
+                       root: Path = config.LLM_CHECKPOINTS_DIR, probe: OllamaModelProbe | None = None,
+                       run=subprocess.run, quantize: str | None = "q4_K_M", meta: dict | None = None) -> dict:
+    """Register a merged fine-tune (safetensors) with Ollama as <name>:<version>. Ollama converts and
+    quantises it itself (its converter handles Qwen3.5 and Gemma 4, unlike llama.cpp GGUFs with a
+    separate vision file), and the base model's renderer/parser/parameters are reused so the
+    fine-tune is prompted exactly as it was trained. Ollama keeps its temporary files in its own
+    model folder."""
+    model_dir = Path(model_dir).resolve()
+    if not _OLLAMA_NAME.match(name):
+        raise ValueError("model name: lowercase letters, digits, '.', '_' or '-'")
+    if not (model_dir / "config.json").exists() or not any(model_dir.glob("*.safetensors")):
+        raise ValueError(f"{model_dir} is not a safetensors model folder")
+    probe = probe or OllamaModelProbe()
+    directives = modelfile_directives(probe.show(base_model).get("modelfile", ""))
+    folder = root / name / version
+    folder.mkdir(parents=True, exist_ok=True)
+    modelfile = folder / "Modelfile"
+    modelfile.write_text("\n".join([f"FROM {model_dir}", *directives]) + "\n", encoding="utf-8")
+    tag = f"{name}:{version}"
+    command = [_ollama_cli(), "create", tag, "-f", str(modelfile)] + (["--quantize", quantize] if quantize else [])
+    done = run(command, cwd=folder, capture_output=True, text=True, timeout=4 * 3600)
+    if done.returncode != 0:
+        raise RuntimeError(f"ollama create failed: {(done.stderr or done.stdout).strip()[-400:]}")
+    record = {"ollama_name": tag, "base_model": base_model, "created_at": time.time(), **(meta or {})}
+    (folder / "meta.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return record | {"path": str(folder)}

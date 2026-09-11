@@ -144,6 +144,9 @@ class OllamaModelProbe:
                 )
         raise RuntimeError(f"{model_name} did not appear in /api/ps after loading")
 
+    def loaded_models(self) -> list[str]:
+        return [m["name"] for m in self._request("GET", "/api/ps").get("models", [])]
+
     def unload(self, model_name: str) -> None:
         self._request("POST", "/api/generate", json={"model": model_name, "keep_alive": 0})
 

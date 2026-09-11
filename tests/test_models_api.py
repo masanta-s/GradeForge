@@ -68,7 +68,9 @@ def test_probe_resolve_and_card_give_the_plans_tiers(api):
     wait(api, api.post("/api/models/probe", json={"name": "qwen3.5:9b"}).json()["job_id"])
     wait(api, api.post("/api/models/resolve", json={"name": "qwen3.5:9b"}).json()["job_id"])
     qwen = api.get("/api/models/card", params={"name": "qwen3.5:9b"}).json()
-    assert qwen["tier"]["level"] == "yellow" and "22 GB" in qwen["tier"]["reason"]
+    # LoRA needs ~22 GB, but its layers can be streamed through this 8 GB GPU
+    assert qwen["tier"]["level"] == "green" and qwen["tier"]["where"] == "this computer, streamed"
+    assert qwen["training_plan"]["estimate"]["vram_gb"] == 22
 
 
 def test_not_right_override(api):
@@ -166,22 +168,34 @@ def test_llm_plan_and_notebook_export_follow_the_router(api):
     no_data = api.post("/api/learning/llm/export", json={"consent": True, "model": "gemma4:e4b"})
     assert no_data.status_code == 409 and "no written-answer corrections" in no_data.json()["detail"]
 
-    services.corrections.add_grade_correction(
-        exam_id="e", sheet_id="riya-sharma-1a2b3c", question_id="2", subject="Biology", model="qwen3.5:9b",
-        question_text="What is photosynthesis?", model_answer="Plants make glucose using sunlight.",
-        student_answer="plants make food", max_marks=4, ai_marks=3, teacher_marks=1, ai_quality=0.7,
-        strictness=50, note="too vague", teacher_name="Mrs. Iyer")
-    # the default model (qwen3.5:9b) can't be fine-tuned on free hardware: refused with the reason
-    refused = api.post("/api/learning/llm/export", json={"consent": True})
-    assert refused.status_code == 409 and "22 GB" in refused.json()["detail"]
+    from src.learning.evaluation import split_of
+
+    for i in range(12):
+        services.corrections.add_grade_correction(
+            exam_id="e", sheet_id=f"riya-sharma-{i}", question_id="2", subject="Biology", model="qwen3.5:9b",
+            question_text="What is photosynthesis?", model_answer="Plants make glucose using sunlight.",
+            student_answer=f"plants make food {i}", max_marks=4, ai_marks=3, teacher_marks=1, ai_quality=0.7,
+            strictness=50, note=f"too vague {i}", teacher_name="Mrs. Iyer")
+    splits = {c.student_answer: split_of(c) for c in services.corrections.grade_corrections()}
 
     response = api.post("/api/learning/llm/export", json={"consent": True, "model": "gemma4:e4b"})
     assert response.status_code == 200 and "attachment" in response.headers["content-disposition"]
     notebook = json.loads(response.text)
     text = json.dumps(notebook)
-    assert notebook["nbformat"] == 4 and "plants make food" in text and "too vague" in text
-    assert 'BASE_MODEL = \\"google/gemma-4-E4B-it\\"' in text and "load_in_4bit=True" in text
+    assert notebook["nbformat"] == 4 and "BASE_MODEL = 'google/gemma-4-E4B-it'" in text
+    assert "LOAD_IN_4BIT = True" in text and "SPLIT_ACROSS_GPUS = False" in text   # QLoRA on one T4
+    config_cell = "".join(notebook["cells"][2]["source"])
+    data: dict = {}
+    exec(config_cell, data)   # plain assignments: the notebook's training and validation data
+    contents = "\n".join(m["content"] for e in data["EXAMPLES"] + data["VALIDATION"] for m in e["messages"])
+    for answer, split in splits.items():   # held-out answers never leave: they judge the result
+        assert (f"{answer}\n" in contents) == (split != "holdout"), (answer, split)
+    assert "holdout" in splits.values()
     assert "riya" not in text.lower() and "Mrs. Iyer" not in text  # no student or teacher identity
-    assert "Only 1 examples" in text  # below the recommended 200
+    assert "Only " in text  # below the recommended 200
     plan = api.get("/api/learning/llm/plan", params={"model": "gemma4:e4b"}).json()
-    assert plan["plan"]["recommended"] == "colab" and not plan["needs_source"]
+    assert plan["plan"]["recommended"] == "colab" and not plan["needs_source"] and not plan["weights_ready"]
+
+    # qwen3.5:9b (22 GB): trains here by streaming; its notebook splits the model across Kaggle's two T4s
+    qwen = api.post("/api/learning/llm/export", json={"consent": True, "model": "qwen3.5:9b"})
+    assert qwen.status_code == 200 and "SPLIT_ACROSS_GPUS = True" in qwen.text and "LOAD_IN_4BIT = False" in qwen.text

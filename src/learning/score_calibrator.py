@@ -33,14 +33,17 @@ class BiasReport:
 
 
 class ScoreCalibrator:
-    def __init__(self, store: CorrectionStore, min_corrections: int = MIN_CORRECTIONS):
+    def __init__(self, store: CorrectionStore, min_corrections: int = MIN_CORRECTIONS,
+                 exclude_ids: frozenset[int] = frozenset()):
+        """`exclude_ids`: corrections to leave out of the fit (held-out answers being measured)."""
         self.store = store
         self.min_corrections = min_corrections
+        self.exclude_ids = exclude_ids
         self._fitted: dict[tuple[str, str], tuple[int, IsotonicRegression]] = {}
 
     def _pairs(self, model: str, subject: str) -> tuple[np.ndarray, np.ndarray]:
         rows = [c for c in self.store.grade_corrections(model=model, subject=subject)
-                if c.ai_quality is not None and c.teacher_quality is not None]
+                if c.ai_quality is not None and c.teacher_quality is not None and c.id not in self.exclude_ids]
         return (np.array([c.ai_quality for c in rows], float), np.array([c.teacher_quality for c in rows], float))
 
     def _model(self, model: str, subject: str) -> IsotonicRegression | None:

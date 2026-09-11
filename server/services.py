@@ -36,6 +36,7 @@ class Services:
         self._ocr = self._llm = self._subjective = self._diagram_evaluator = self._dispute_log = None
         self._corrections = self._retriever = self._calibrator = None
         self._models = self._cloud = None
+        self.pause_requested = False   # asks a running fine-tune to stop at its next checkpoint
 
     # --- settings ----------------------------------------------------------------------
     @property
