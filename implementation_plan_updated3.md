@@ -807,6 +807,14 @@ class CloudProvider:
 
 ### LLM Weight Fine-Tuning — The Real Pipeline
 
+> [!IMPORTANT]
+> **As built (2026-09-11), replacing parts of the pipeline below.**
+> - **Qwen 3.5 9B trains on the 8 GB laptop** by streaming layers through the GPU: frozen weights stay memory-mapped on disk, each decoder layer is loaded just before it runs, and per-layer gradient checkpointing reloads it for backward. Only LoRA learns. Gradients match normal training exactly (tested). Measured: 11.5 GiB/s RAM→GPU, ~35 ms to load a layer vs ~380 ms to train it on 4k tokens, so PCIe isn't the bottleneck. Estimate ~20–35 min per 200 checked answers.
+> - **No GGUF from the notebook.** Ollama 0.34 applies LoRA adapters only to `llama`/`gemma2` (its `convert.ConvertAdapter`), and llama.cpp-made Qwen 3.5 GGUFs don't load in Ollama. Instead every route produces a PEFT adapter; GradeForge merges it into the original safetensors shard by shard and `ollama create --quantize q4_K_M` imports it with Ollama's own converter (it lists `Qwen3_5ForConditionalGeneration` and `Gemma4ForConditionalGeneration`; verified with a tiny same-architecture model), reusing the base model's `RENDERER`/`PARSER`. Ollama keeps its temporary files in its model folder.
+> - **The notebook** uses plain transformers + PEFT, splitting the model across Kaggle's two T4s when needed (Qwen 3.5 9B LoRA ~22 GB fits 2 × 15 GB split).
+> - **Measuring improvement:** approved sheets record confirmed marks (not just changes), giving a day-by-day "marks kept" trend; a fixed 20% hash-based held-out split is never used for training, few-shot or calibration, and every version is compared on it. A new version is promoted only if its average difference drops by ≥ 1 point of max marks without fewer "within half a mark" answers.
+> - **Training data** is the grader's exact prompt (few-shot examples included) with loss only on `{"quality": X` (plus feedback when the teacher wrote a note); incremental rounds add a 2× replay of older answers; early stopping watches a separate 10% validation split.
+
 > [!WARNING]
 > **Ollama serves GGUF — an inference-only quantised format with no backward pass.** Fine-tuning requires the original fp16/bf16 safetensors from HuggingFace. The full pipeline is:
 >

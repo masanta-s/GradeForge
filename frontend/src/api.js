@@ -82,12 +82,24 @@ export const api = {
     request(`/exams/${id}/sheets/${sid}/what-if`, { method: "POST", body: { strictness, save } }),
   fixMarks: (id, sid, qid, body) =>
     request(`/exams/${id}/sheets/${sid}/questions/${qid}`, { method: "PUT", body }),
+  approveSheet: (id, sid, teacher_name) =>
+    request(`/exams/${id}/sheets/${sid}/approve`, { method: "POST", body: { teacher_name } }),
 
   disputes: (params) => request(`/disputes?${new URLSearchParams(params)}`),
 
   learning: () => request("/learning/status"),
   trainTrocr: (writer) => request("/learning/trocr/train", { method: "POST", body: { writer } }),
   llmPlan: (model) => request(`/learning/llm/plan?${new URLSearchParams(model ? { model } : {})}`),
+  progress: () => request("/learning/progress"),
+  benchmark: (setups) => request("/learning/benchmark", { method: "POST", body: setups ? { setups } : {} }),
+  weights: (model, checkSize = false) =>
+    request(`/learning/llm/weights?${new URLSearchParams({ ...(model ? { model } : {}), check_size: checkSize })}`),
+  downloadWeights: (model) => request("/learning/llm/weights/download", { method: "POST", body: { model } }),
+  retrain: (model, fromScratch = false) =>
+    request("/learning/llm/retrain", { method: "POST", body: { model, from_scratch: fromScratch } }),
+  pauseTraining: () => request("/learning/llm/pause", { method: "POST" }),
+  importAdapter: (model, path) => request("/learning/llm/import-adapter", { method: "POST", body: { model, path } }),
+  llmVersions: (model) => request(`/learning/llm/versions?${new URLSearchParams(model ? { model } : {})}`),
   exportNotebook: async (model) => {
     const response = await fetch("/api/learning/llm/export", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true, model }),

@@ -7,6 +7,44 @@ import { api, assetUrl } from "../api";
 import { Badge, ErrorNote, JobBar, Modal, StrictnessSlider } from "../components";
 import { useJob, useSettings } from "../hooks";
 
+// Approving a checked sheet confirms every AI mark the teacher left alone. Without it GradeForge
+// would only ever see its mistakes, and couldn't tell how often it is right.
+function ApproveBar({ result, teacher, approve, onApproved }) {
+  const [name, setName] = useState(teacher);
+  useEffect(() => setName(teacher), [teacher]);
+  const mutation = useMutation({ mutationFn: () => approve(name.trim()), onSuccess: onApproved });
+  const approved = result.approved_at;
+  return (
+    <div className={clsx("card flex flex-wrap items-center gap-3 p-4 text-sm", approved && "border-emerald-200 bg-emerald-50/50")}>
+      <div className="min-w-60 flex-1 text-slate-600">
+        {approved ? (
+          <span className="flex items-center gap-1.5 text-emerald-800">
+            <Check size={16} /> Approved by {result.approved_by} on {new Date(approved).toLocaleDateString()}.
+            Changed a mark since? Approve again.
+          </span>
+        ) : (
+          <>Checked every mark? <b className="text-slate-800">Approve</b> to confirm the marks you left unchanged;
+            that is how GradeForge measures how often it agrees with you.</>
+        )}
+      </div>
+      {!teacher && (
+        <input className="input w-44 py-1.5" placeholder="Your name" aria-label="Your name" value={name}
+          onChange={(e) => setName(e.target.value)} />
+      )}
+      <button className={approved ? "btn-secondary" : "btn-primary"} disabled={!name.trim() || mutation.isPending}
+        onClick={() => mutation.mutate()}>
+        <Check size={15} /> {approved ? "Approve again" : "Approve marks"}
+      </button>
+      {mutation.data && (
+        <span className="w-full text-xs text-slate-500">
+          {mutation.data.judged ? `You kept ${mutation.data.judged - mutation.data.changed} of ${mutation.data.judged} AI-judged marks.` : "No AI-judged answers on this sheet."}
+        </span>
+      )}
+      <div className="w-full"><ErrorNote>{mutation.error?.message}</ErrorNote></div>
+    </div>
+  );
+}
+
 export default function SheetReviewPage() {
   const { examId, sheetId } = useParams();
   const queryClient = useQueryClient();
@@ -90,6 +128,10 @@ export default function SheetReviewPage() {
                   <div className="label">Text not matched to any question</div>
                   <pre className="whitespace-pre-wrap font-sans text-slate-700">{result.unplaced_text}</pre>
                 </div>
+              )}
+              {!preview && (
+                <ApproveBar result={result} teacher={settings?.teacher_name ?? ""}
+                  approve={(name) => api.approveSheet(examId, sheetId, name)} onApproved={refresh} />
               )}
             </>
           ) : (

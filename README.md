@@ -19,8 +19,9 @@ blocked without explicit consent.
    line and drawing is matched to its question.
 4. **Grade.** Every mark comes with feedback and, when something is uncertain, a plain reason
    to check it. A strictness slider (0-100) re-scores instantly without re-running any model.
-5. **Correct.** Fix a misread line or change a mark. Corrections are kept as the teacher's
-   intent and improve future grading.
+5. **Correct and approve.** Fix a misread line or change a mark, then **Approve marks**: the marks
+   you left alone are recorded as confirmed. Both are kept as the teacher's intent, improve future
+   grading, and are what "how often does the AI agree with me" is measured on.
 
 Try it without preparing files: **Exams → Load demo exam** creates a Biology test with a
 finalized key and three students (strong, weak, and one who skipped the diagram).
@@ -32,7 +33,22 @@ finalized key and three students (strong, weak, and one who skipped the diagram)
 | 1 | Past corrections of similar answers are shown to the AI as examples | every model, cloud included | 1 correction |
 | 2 | Isotonic calibration of each model's bias against the teacher, per subject | every model | 15 corrections |
 | 3 | LoRA fine-tuning of TrOCR on corrected lines; used only if held-out error drops | the handwriting reader | 20 lines |
-| 4 | A Colab/Kaggle notebook that fine-tunes the grading model (an 8 GB GPU can't); the result is imported back into Ollama | models the training router can place (e.g. Gemma 4 E4B) | 200 recommended |
+| 4 | LoRA fine-tuning of the grading model: on this computer, streaming the model's layers through the GPU one at a time (private), or with a generated Colab/Kaggle notebook. The adapter is merged into the original weights and imported into Ollama; the new version is used only if it matches the teacher better on held-out answers | models the training router can place (Qwen 3.5 here; Gemma 4 via notebook) | 200 recommended |
+
+**Fine-tuning a 9B model on an 8 GB GPU.** The frozen weights stay on disk (memory-mapped). Each
+decoder layer is copied to the GPU just before it runs and dropped afterwards; per-layer gradient
+checkpointing re-runs a layer's forward during backward, which loads it again. Only the LoRA
+adapters learn. The gradients are identical to normal training (tested against a fully loaded model).
+Rounds are incremental (new answers + a replay of older ones), stop early when held-back validation
+answers stop improving, and can be paused and resumed.
+
+## Is it improving?
+
+- **Day by day:** every approved sheet records how many AI marks the teacher kept. The Learning page
+  shows this per week, with the average change.
+- **Per version:** one in five checked answers (a fixed, hash-based split) is never used for
+  examples, calibration or training. Each model setup re-marks them: exact agreement, within half a
+  mark, average difference and whether it leans generous or strict. Also downloadable as CSV.
 
 ## Choosing a model
 
@@ -70,7 +86,9 @@ Manager; a cost estimate before use; and grading only switches to the cloud afte
 | Capability check, `qwen3.5:9b` | 5/5 passed in ~29 s; marks the known answers 5.0 / 2.0 / 0.0 of 5 |
 | Capability check, `gemma4:e4b` | grading checks pass; **fails vision**: Ollama lists "vision", but the model replies it can't see the image, so diagrams skip its visual judgement |
 | HuggingFace source found | `qwen3.5:9b` → `Qwen/Qwen3.5-9B`, `gemma4:e4b` → `google/gemma-4-E4B-it` (parameter counts match Ollama's), ~1 s |
-| Training route on this laptop | Gemma 4 E4B: QLoRA ~10 GB → Colab/Kaggle. Qwen 3.5 9B: LoRA ~22 GB → inference-only |
+| Training route on this laptop | Qwen 3.5 9B: LoRA needs ~22 GB → layers streamed through this GPU (or Kaggle 2x T4, split). Gemma 4 E4B: QLoRA ~10 GB → Colab/Kaggle |
+| Streaming a Qwen3.5-9B layer | RAM → GPU at 11.5 GiB/s: ~35 ms to load a layer vs ~380 ms to train it on a 4k-token chunk, so compute, not PCIe, sets the pace. Estimated ~20–35 min per 200 checked answers (not yet run at full size) |
+| Getting a fine-tune into Ollama | Ollama 0.34 applies LoRA adapters only to `llama`/`gemma2`, so adapters are merged first; Ollama's own converter imported and Q4-quantised a tiny model with Qwen3.5-9B's exact architecture in 7 s |
 
 These are synthetic test pages. Real handwriting will be harder, and that is the main thing
 still to validate (see *Limitations*).
@@ -153,7 +171,8 @@ src/ocr/          preprocessing, TrOCR reading, PDF text layer, answers -> quest
 src/diagram/      drawing detection, label reading, scoring, teacher weightage
 src/grading/      answer key model, MCQ + written + mixed grading, strictness, JSON defence
 src/knowledge/    LLM client, question-paper parser, answer keys, validation, disputes
-src/learning/     corrections store, few-shot retrieval, calibration, TrOCR LoRA, notebook export
+src/learning/     corrections store, few-shot retrieval, calibration, TrOCR LoRA, agreement metrics,
+                  streamed LLM LoRA trainer, adapter merge, notebook export
 src/models/       model identity + VRAM, capability probe, HF resolver, architecture gate,
                   training router, cloud providers + key store, checkpoint clean-up
 registry/         override registry (patches for auto-resolution, fetched from this repo)
@@ -167,11 +186,13 @@ tests/            pytest suite
 
 - **Not yet validated on real students' handwriting.** All OCR numbers above come from
   handwriting-style fonts and simulated writers.
-- The Colab fine-tuning notebook is generated but has not been run end to end. Its base model now
-  comes from the HF resolver; whether that Unsloth version supports the architecture is only
-  known when the notebook's loading cell runs (it stops with a clear message if not).
-- When the router picks "this computer" (a ≥ 24 GB GPU with `.venv-train` installed), GradeForge
-  exports the same notebook for local Jupyter; it doesn't start local LLM training by itself.
+- **The grading model hasn't been fine-tuned at full size yet.** The whole round (streamed training,
+  merge, comparison, promotion) runs in the tests on a tiny model with Qwen 3.5's exact
+  architecture; the first real run needs the 19 GB original weights and enough checked answers.
+- The Colab/Kaggle notebook runs in the tests on that tiny model (same code, one GPU), but not yet on
+  Kaggle itself. Its first steps print speed and GPU memory per GPU.
+- Streamed training is enabled only for architectures verified by the gradient-equivalence test
+  (Qwen 3.5 so far); others use the notebook.
 - Cloud providers are tested against stand-ins only (no API keys were available while building);
   key storage, consent, cost estimates and routing through LiteLLM are covered by tests.
 - Label reading inside diagrams uses TrOCR, so labels touching drawing lines can be missed. The
