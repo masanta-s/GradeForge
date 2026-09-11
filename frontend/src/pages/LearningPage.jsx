@@ -1,19 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { BookMarked, CloudUpload, Gauge, PenTool, Sparkles } from "lucide-react";
+import { BookMarked, CloudUpload, Gauge, PenTool, Search, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
 import { Badge, ErrorNote, JobBar, PageHeader } from "../components";
-import { useJob } from "../hooks";
+import { useJob, useSettings } from "../hooks";
+import { PlanOptions, TierBadge } from "../modelParts";
 
 export default function LearningPage() {
   const queryClient = useQueryClient();
   const { data: status } = useQuery({ queryKey: ["learning"], queryFn: api.learning });
   const job = useJob((j) => { if (j.status === "done") queryClient.invalidateQueries({ queryKey: ["learning"] }); });
   const [writer, setWriter] = useState("");
-  const [consent, setConsent] = useState(false);
   const [trainError, setTrainError] = useState(null);
-  const exportNotebook = useMutation({ mutationFn: api.exportNotebook });
   if (!status) return null;
 
   const ocrCount = writer ? status.ocr.by_writer[writer] ?? 0 : status.ocr.corrections;
@@ -79,19 +78,10 @@ export default function LearningPage() {
 
         <Mechanism n={4} icon={Sparkles} title="Fine-tuning the grading model"
           active={false} status={`${status.llm.examples} of ${status.llm.recommended} recommended examples`}>
-          This computer's GPU is too small to fine-tune current models, so GradeForge prepares a notebook that
-          trains on a free Colab or Kaggle GPU. You then import the result into Ollama.
+          Trains the grading model's own weights on your corrections. GradeForge works out where that can run
+          for each model: this computer, or a free Colab/Kaggle GPU through a notebook.
           <Progress value={status.llm.examples / status.llm.recommended} />
-          <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
-            <input type="checkbox" className="mt-0.5 accent-brand-600" checked={consent}
-              onChange={(e) => setConsent(e.target.checked)} />
-            I understand the notebook contains students' answers (no names) and will leave this computer.
-          </label>
-          <button className="btn-secondary mt-3 py-1.5" disabled={!consent || !status.llm.can_export || exportNotebook.isPending}
-            onClick={() => exportNotebook.mutate()}>
-            <CloudUpload size={15} /> Export Colab notebook
-          </button>
-          <ErrorNote>{exportNotebook.error?.message}</ErrorNote>
+          <FineTunePanel canExport={status.llm.can_export} />
         </Mechanism>
       </div>
 
@@ -120,6 +110,115 @@ export default function LearningPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// Mechanism 4: pick a model, see where (or whether) it can be fine-tuned, export the notebook,
+// and import the trained GGUF back into Ollama.
+function FineTunePanel({ canExport }) {
+  const queryClient = useQueryClient();
+  const { data: settings } = useSettings();
+  const models = useQuery({ queryKey: ["models"], queryFn: api.models });
+  const [model, setModel] = useState(null);
+  const chosen = model ?? settings?.model;
+  const plan = useQuery({ queryKey: ["llm-plan", chosen], queryFn: () => api.llmPlan(chosen), enabled: !!chosen });
+  const resolve = useJob((j) => j.status === "done" && queryClient.invalidateQueries({ queryKey: ["llm-plan"] }));
+  const [consent, setConsent] = useState(false);
+  const [error, setError] = useState(null);
+  const exportNotebook = useMutation({ mutationFn: () => api.exportNotebook(chosen) });
+  const p = plan.data?.plan;
+  const trainable = models.data?.filter((m) => m.tier.level === "green" && m.name !== chosen) ?? [];
+
+  const findSource = async () => {
+    setError(null);
+    try { resolve.start((await api.resolveModel(chosen)).job_id); } catch (e) { setError(e.message); }
+  };
+
+  return (
+    <div className="mt-3 space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-xs text-slate-600" htmlFor="ft-model">Model to fine-tune</label>
+        <select id="ft-model" className="input w-auto py-1.5" value={chosen ?? ""} onChange={(e) => setModel(e.target.value)}>
+          {models.data?.map((m) => <option key={m.name} value={m.name}>{m.name}{m.active ? " (grading now)" : ""}</option>)}
+        </select>
+        {plan.data && <TierBadge tier={plan.data.tier} />}
+      </div>
+      <ErrorNote>{plan.error?.message || models.error?.message}</ErrorNote>
+
+      {plan.data?.needs_source ? (
+        <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+          Fine-tuning needs this model's original weights. GradeForge can find them on HuggingFace (it sends only
+          the model's name).
+          <button className="btn-secondary mt-2 py-1" disabled={resolve.running} onClick={findSource}>
+            <Search size={14} /> Find training source
+          </button>
+          <div className="mt-2"><JobBar {...resolve} /></div>
+        </div>
+      ) : p && (
+        <div className="rounded-lg bg-slate-50 p-3">
+          {p.repo && <div className="mb-2 text-xs text-slate-500">Trains <b className="text-slate-700">{p.repo}</b></div>}
+          <PlanOptions plan={p} />
+          {!p.recommended && trainable.length > 0 && (
+            <p className="mt-2 text-xs text-slate-600">
+              Tip: {trainable.map((m) => m.name).join(" or ")} can be fine-tuned ({trainable[0].tier.where}). Few-shot
+              examples and calibration keep learning either way.
+            </p>
+          )}
+        </div>
+      )}
+
+      {p?.recommended && (
+        <>
+          <label className="flex items-start gap-2 text-xs text-slate-700">
+            <input type="checkbox" className="mt-0.5 accent-brand-600" checked={consent}
+              onChange={(e) => setConsent(e.target.checked)} />
+            I understand the notebook contains students' answers (no names) and will leave this computer.
+          </label>
+          <button className="btn-secondary py-1.5" disabled={!consent || !canExport || exportNotebook.isPending}
+            onClick={() => exportNotebook.mutate()}>
+            <CloudUpload size={15} /> Export {p.recommended === "local" ? "training" : "Colab/Kaggle"} notebook
+          </button>
+        </>
+      )}
+      <ErrorNote>{exportNotebook.error?.message || error}</ErrorNote>
+      <ImportModel base={chosen} />
+    </div>
+  );
+}
+
+function ImportModel({ base }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ path: "", name: "gradeforge-grader" });
+  const [error, setError] = useState(null);
+  const job = useJob((j) => j.status === "done" && queryClient.invalidateQueries({ queryKey: ["models"] }));
+  const start = async (e) => {
+    e.preventDefault();
+    setError(null);
+    try { job.start((await api.importModel({ ...form, base })).job_id); } catch (err) { setError(err.message); }
+  };
+  if (!open) {
+    return <button className="text-xs text-brand-700 hover:underline" onClick={() => setOpen(true)}>Import a trained model (.gguf)…</button>;
+  }
+  return (
+    <form className="space-y-2 rounded-lg border border-slate-200 p-3" onSubmit={start}>
+      <div className="text-xs font-medium text-slate-700">Import the .gguf downloaded from Colab/Kaggle</div>
+      <input className="input py-1.5" placeholder="F:\Downloads\gradeforge-grader.Q4_K_M.gguf" aria-label="Path to the .gguf file"
+        value={form.path} onChange={(e) => setForm({ ...form, path: e.target.value })} />
+      <div className="flex flex-wrap items-center gap-2">
+        <input className="input w-auto flex-1 py-1.5" aria-label="Name in Ollama" value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <span className="text-xs text-slate-500">uses {base}'s chat template</span>
+        <button className="btn-primary py-1.5" disabled={!form.path.trim() || job.running}>Import</button>
+      </div>
+      <JobBar {...job} />
+      {job.job?.status === "done" && (
+        <p className="text-xs text-emerald-700">
+          Registered {job.job.result.ollama_name}. Run its check under Models & settings, then compare it on a few corrected sheets.
+        </p>
+      )}
+      <ErrorNote>{error}</ErrorNote>
+    </form>
   );
 }
 

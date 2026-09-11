@@ -452,6 +452,8 @@ class ArchitectureGate:
 
 A small JSON file hosted on GitHub raw, fetched at startup, cached to SQLite. **Not a catalogue** — just a handful of entries to patch cases auto-resolution gets wrong (e.g., a model whose HF repo has an unusual name).
 
+> **As built:** `registry/overrides.json` ships with the app and is refreshed from the repo at most once a day, **only when the teacher asks GradeForge to look up a model** (not at startup), so the app makes no network requests unless asked. It holds three kinds of patch: HF search terms and "QLoRA not advised" per family (Qwen 3.5), fixed repos per Ollama name (empty so far), and documented training VRAM per repo (the Unsloth figures above; other models get an estimate from their parameter count).
+
 ### Example models auto-resolution finds today (not a supported-models list)
 
 These are examples of what the resolution chain discovers on current hardware. The system works with whatever Ollama serves:
@@ -570,6 +572,14 @@ class CapabilityProber:
                          following, or rubric reasoning)
         """
 ```
+
+> [!NOTE]
+> **Built and measured (2026-09-11, Ollama 0.34.0).** `qwen3.5:9b` passes all five probes in ~29 s
+> (rubric: full 5.0, partial 2.0, wrong 0.0 of 5). `gemma4:e4b` passes the three critical probes
+> but **fails vision**: Ollama lists the `vision` capability, yet the model answers "I cannot see
+> the image" (also when calling `/api/chat` directly). So the capability flag is not trusted:
+> a failed vision probe makes grading skip that model's visual diagram judgement. The long-context
+> probe uses ~5.7k tokens (measured) to stay inside the 8K window.
 
 **UI — Model Capability Card:**
 
@@ -1770,7 +1780,7 @@ These came out of the v2 review. The version and model changes above don't resol
 | 1 | **Mapping student answers to questions** is not specified (`question_number` appears but nothing fills it) | Phases 2–4 | Fixed answer-sheet template, or a `qwen3.5:9b` pass that splits OCR text by the question numbers students write |
 | 2 | **Who grades — embeddings or the LLM?** `subjective_grader.py` is embedding-based, yet few-shot prompts and `GradingResult` JSON assume LLM grading | Phases 3, 5, 7 | ✅ **Resolved (built):** the LLM (`qwen3.5:9b`) produces quality + feedback; embeddings + keywords are a cross-check (flag on large disagreement) and the no-LLM fallback; calibrator on top in Phase 7. **Measured:** a 70/30 blend tied a *wrong* answer (describing respiration, LLM 0.1 but local 0.47) with a partial one, so the local features are not blended in |
 | 3 | **TrOCR reads one line at a time**; no text-line detector is listed, and printed/PDF question papers need a different path | Phases 2, 4 | Add line/text detection before TrOCR; PyMuPDF for PDFs; consider `qwen3.5:9b` vision (OCRBench 89.2) as an OCR cross-check when TrOCR confidence is low. With Qwen as default it can't sit next to TrOCR, so low-confidence line crops are **queued in Phase 1 and re-read in Phase 3** once the LLM is loaded (see VRAM Budget) |
-| 4 | **HF resolver** compares against `config.json`, which has no parameter count | Layer 2 | Use `safetensors.total` from the HF model API; allow for vision-tower params |
+| 4 | **HF resolver** compares against `config.json`, which has no parameter count | Layer 2 | ✅ **Resolved (built):** uses `safetensors.total` from the HF search API (one request returns counts, `model_type` and `base_model` tags for 50 candidates). **Measured:** `Qwen/Qwen3.5-9B` = 9,653,104,368 parameters, exactly Ollama's count for `qwen3.5:9b`; `google/gemma-4-E4B-it` differs from `gemma4:e4b` by 1,184. AWQ/FP8 re-uploads keep the same count, so quantisation markers and third-party `base_model` tags are penalised, and a same-org finetune of another candidate (the `-it` of the pretrained release) gets a bonus |
 | 5 | **Raw cosine similarity** rarely drops below ~0.5 for on-topic wrong answers, so lenient strictness over-awards | Phase 3 | Rescale similarity against a per-question "wrong but on-topic" baseline before the power curve. The ASCII chart in Phase 3 is also drawn inverted |
 | 6 | **SSIM on hand-drawn diagrams** mostly measures stroke/position noise | Phase 4 | ✅ **Resolved (built):** structure and completeness come from the vision model; SSIM (on normalised, blurred strokes) is used only when no vision model is available. **Measured:** the same cell drawing with 3 labels removed scored SSIM 0.64 against itself, so SSIM tracks ink placement rather than correctness. Real models: complete cell 4/4, one label 2.5/4, wrong diagram 0/4 |
 | 7 | **"≥20 corrections from the same writer"** needs a `writer_id`; a 4-sample held-out set gives a noisy CER | Phase 7 | ✅ **Resolved (built):** `ocr_corrections.writer_id` (training per student or for everyone); held-out set is max(5, 25 %) of lines, and promotion needs a CER gain of more than 0.5 points. **Measured** on a simulated difficult writer: held-out CER 23.1 % → 1.5 % (36 training lines, 22 s), and 11.7 % → 0.8 % on words never seen in training. A checkpoint that measures worse is kept out of use (tested) |

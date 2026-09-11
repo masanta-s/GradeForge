@@ -31,8 +31,30 @@ export const api = {
   health: () => request("/health"),
   settings: () => request("/settings"),
   saveSettings: (changes) => request("/settings", { method: "PUT", body: changes }),
-  models: () => request("/models"),
   job: (id) => request(`/jobs/${id}`),
+
+  models: () => request("/models"),
+  modelCard: (name) => request(`/models/card?${new URLSearchParams({ name })}`),
+  gpu: () => request("/models/gpu"),
+  probeModel: (name) => request("/models/probe", { method: "POST", body: { name } }),
+  resolveModel: (name) => request("/models/resolve", { method: "POST", body: { name } }),
+  setRepo: (name, repo) => request("/models/resolution", { method: "PUT", body: { name, repo } }),
+  switchModel: (name) => request("/models/switch", { method: "POST", body: { name } }),
+  pullModel: (name) => request("/models/pull", { method: "POST", body: { name } }),
+  importModel: (body) => request("/models/import", { method: "POST", body }),
+  hfToken: () => request("/models/hf-token"),
+  setHfToken: (token) => request("/models/hf-token", { method: "PUT", body: { token } }),
+  deleteHfToken: () => request("/models/hf-token", { method: "DELETE" }),
+  storage: (keep = 2) => request(`/storage?keep=${keep}`),
+  cleanStorage: (keep = 2) => request("/storage/clean", { method: "POST", body: { keep } }),
+
+  cloud: () => request("/cloud"),
+  cloudModelInfo: (model) => request(`/cloud/model-info?${new URLSearchParams({ model })}`),
+  saveCloudKey: (provider, key) => request("/cloud/key", { method: "PUT", body: { provider, key } }),
+  deleteCloudKey: (provider) => request(`/cloud/key/${provider}`, { method: "DELETE" }),
+  testCloudKey: (provider, model) => request("/cloud/test", { method: "POST", body: { provider, model } }),
+  cloudEstimate: (model, papers) => request("/cloud/estimate", { method: "POST", body: { model, papers } }),
+  saveCloudSettings: (body) => request("/cloud/settings", { method: "PUT", body }),
 
   exams: () => request("/exams"),
   createDemo: () => request("/demo", { method: "POST" }),
@@ -65,9 +87,10 @@ export const api = {
 
   learning: () => request("/learning/status"),
   trainTrocr: (writer) => request("/learning/trocr/train", { method: "POST", body: { writer } }),
-  exportNotebook: async () => {
+  llmPlan: (model) => request(`/learning/llm/plan?${new URLSearchParams(model ? { model } : {})}`),
+  exportNotebook: async (model) => {
     const response = await fetch("/api/learning/llm/export", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true, model }),
     });
     if (!response.ok) throw new ApiError(response.status, (await response.json()).detail);
     const link = document.createElement("a");
@@ -78,4 +101,12 @@ export const api = {
   },
 };
 
-export const assetUrl = (examId, sheetId, kind, name) => `/api/exams/${examId}/sheets/${sheetId}/${kind}/${name}`;
+export const formatBytes = (n) => {
+  if (n == null) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  for (; n >= 1024 && i < units.length - 1; i++) n /= 1024;
+  return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+};
+
+export const assetUrl =(examId, sheetId, kind, name) => `/api/exams/${examId}/sheets/${sheetId}/${kind}/${name}`;

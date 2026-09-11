@@ -32,7 +32,28 @@ finalized key and three students (strong, weak, and one who skipped the diagram)
 | 1 | Past corrections of similar answers are shown to the AI as examples | every model, cloud included | 1 correction |
 | 2 | Isotonic calibration of each model's bias against the teacher, per subject | every model | 15 corrections |
 | 3 | LoRA fine-tuning of TrOCR on corrected lines; used only if held-out error drops | the handwriting reader | 20 lines |
-| 4 | A Colab/Kaggle notebook that fine-tunes the grading model (an 8 GB GPU can't) | Gemma 4 E4B | 200 recommended |
+| 4 | A Colab/Kaggle notebook that fine-tunes the grading model (an 8 GB GPU can't); the result is imported back into Ollama | models the training router can place (e.g. Gemma 4 E4B) | 200 recommended |
+
+## Choosing a model
+
+Any model Ollama serves can grade. There is no list of supported models:
+
+1. **Identify** it from Ollama's own metadata (architecture, size, context) and measure its real VRAM.
+2. **Check it** (~30 s) before it grades: JSON output, following instructions, marking a known
+   answer (full / partial / wrong), reading an image, and finding one fact in a long text. A model
+   that fails a required check can't be selected.
+3. **Find its training source** on HuggingFace (only the model's name is sent), matched on the exact
+   parameter count, with quantised re-uploads and third-party finetunes ranked down. "Not right?"
+   lets the teacher pick the repo instead.
+4. **Gate** on the installed libraries (transformers knows the architecture, Ollama already runs it
+   as GGUF), then **route** training: this GPU, free Colab/Kaggle, or nowhere, with the reason.
+
+Each model gets a tier: 🟢 trainable (and where), 🟡 inference-only (few-shot + calibration still
+learn), or 🔴 incompatible. A small [override registry](registry/overrides.json) patches the few
+things auto-resolution can't know, such as "don't QLoRA-train Qwen 3.5".
+
+Cloud models (OpenAI, Anthropic, Gemini) are optional: your own API key, kept in Windows Credential
+Manager; a cost estimate before use; and grading only switches to the cloud after an explicit consent tick.
 
 ## Measured on this build (RTX 4060 Laptop, 8 GB)
 
@@ -46,6 +67,10 @@ finalized key and three students (strong, weak, and one who skipped the diagram)
 | OCR on synthetic handwriting-font pages | 0-2 % character error rate |
 | TrOCR fine-tune on a difficult (simulated) writer | held-out CER 23.1 % → 1.5 %; unseen words 11.7 % → 0.8 %; ~22 s |
 | Diagram scoring (complete / one label / wrong diagram) | 4/4, 2.5/4, 0/4 |
+| Capability check, `qwen3.5:9b` | 5/5 passed in ~29 s; marks the known answers 5.0 / 2.0 / 0.0 of 5 |
+| Capability check, `gemma4:e4b` | grading checks pass; **fails vision**: Ollama lists "vision", but the model replies it can't see the image, so diagrams skip its visual judgement |
+| HuggingFace source found | `qwen3.5:9b` → `Qwen/Qwen3.5-9B`, `gemma4:e4b` → `google/gemma-4-E4B-it` (parameter counts match Ollama's), ~1 s |
+| Training route on this laptop | Gemma 4 E4B: QLoRA ~10 GB → Colab/Kaggle. Qwen 3.5 9B: LoRA ~22 GB → inference-only |
 
 These are synthetic test pages. Real handwriting will be harder, and that is the main thing
 still to validate (see *Limitations*).
@@ -62,6 +87,8 @@ flowchart LR
     GR --> LLM["qwen3.5:9b via Ollama<br/>(LiteLLM)"]
     KN --> LLM
     DG --> LLM
+    API --> MD["Models: capability check,<br/>HF source, training router, cloud"]
+    MD --> LLM
     API --> LE["Learning: corrections,<br/>few-shot, calibration, fine-tune"]
     LE --> GR
     LE --> OCR
@@ -127,7 +154,9 @@ src/diagram/      drawing detection, label reading, scoring, teacher weightage
 src/grading/      answer key model, MCQ + written + mixed grading, strictness, JSON defence
 src/knowledge/    LLM client, question-paper parser, answer keys, validation, disputes
 src/learning/     corrections store, few-shot retrieval, calibration, TrOCR LoRA, notebook export
-src/models/       Ollama model identification and measured VRAM
+src/models/       model identity + VRAM, capability probe, HF resolver, architecture gate,
+                  training router, cloud providers + key store, checkpoint clean-up
+registry/         override registry (patches for auto-resolution, fetched from this repo)
 server/           FastAPI routes, background jobs, file storage, what-if rescoring, exports
 frontend/         React 19 + Vite 8 + Tailwind 4
 demo/             sample exam, students and sheet renderer
@@ -138,11 +167,13 @@ tests/            pytest suite
 
 - **Not yet validated on real students' handwriting.** All OCR numbers above come from
   handwriting-style fonts and simulated writers.
-- The Colab fine-tuning notebook is generated but has not been run end to end; check the
-  base-model id and Unsloth calls on first use.
-- Planned but not built yet: a capability probe that tests an unknown model before it grades,
-  HuggingFace source resolution and architecture checks for new models, cloud-provider settings
-  in the UI, and checkpoint clean-up.
+- The Colab fine-tuning notebook is generated but has not been run end to end. Its base model now
+  comes from the HF resolver; whether that Unsloth version supports the architecture is only
+  known when the notebook's loading cell runs (it stops with a clear message if not).
+- When the router picks "this computer" (a ≥ 24 GB GPU with `.venv-train` installed), GradeForge
+  exports the same notebook for local Jupyter; it doesn't start local LLM training by itself.
+- Cloud providers are tested against stand-ins only (no API keys were available while building);
+  key storage, consent, cost estimates and routing through LiteLLM are covered by tests.
 - Label reading inside diagrams uses TrOCR, so labels touching drawing lines can be missed. The
   vision model's own reading of the labels covers most of these.
 
