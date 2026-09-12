@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { BookMarked, CloudUpload, Cpu, Download, Gauge, Pause, PenTool, Search, Sparkles } from "lucide-react";
+import { BookMarked, CloudUpload, Cpu, Download, Gauge, Library, Pause, PenTool, Search, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { api, formatBytes } from "../api";
 import { Badge, ErrorNote, JobBar, PageHeader } from "../components";
@@ -13,13 +13,14 @@ export default function LearningPage() {
   const { data: status } = useQuery({ queryKey: ["learning"], queryFn: api.learning });
   const job = useJob((j) => { if (j.status === "done") queryClient.invalidateQueries({ queryKey: ["learning"] }); });
   const [writer, setWriter] = useState("");
+  const [dataset, setDataset] = useState(null);
   const [trainError, setTrainError] = useState(null);
   if (!status) return null;
 
   const ocrCount = writer ? status.ocr.by_writer[writer] ?? 0 : status.ocr.corrections;
   const train = async () => {
     setTrainError(null);
-    try { job.start((await api.trainTrocr(writer || null)).job_id); } catch (e) { setTrainError(e.message); }
+    try { job.start((await api.trainTrocr(writer || null, dataset)).job_id); } catch (e) { setTrainError(e.message); }
   };
 
   return (
@@ -67,15 +68,17 @@ export default function LearningPage() {
               {Object.entries(status.ocr.by_writer).map(([w, n]) => <option key={w} value={w}>{w} ({n})</option>)}
             </select>
             <button className="btn-primary py-1.5" onClick={train}
-              disabled={job.running || ocrCount < status.ocr.min_samples}>
-              Train on this handwriting
+              disabled={job.running || (ocrCount < status.ocr.min_samples && !dataset)}>
+              Train on this handwriting{dataset ? " + dataset" : ""}
             </button>
           </div>
-          {ocrCount < status.ocr.min_samples && (
+          {ocrCount < status.ocr.min_samples && !dataset && (
             <p className="mt-2 text-xs text-slate-500">
-              {plural(status.ocr.min_samples - ocrCount, "more corrected line")} needed.
+              {plural(status.ocr.min_samples - ocrCount, "more corrected line")} needed, or import a handwriting
+              dataset below to start from other people's writing.
             </p>
           )}
+          <HandwritingDatasets chosen={dataset} onChoose={setDataset} busy={job.running} />
           <div className="mt-3"><JobBar {...job} /></div>
           <ErrorNote>{trainError}</ErrorNote>
         </Mechanism>
@@ -124,6 +127,71 @@ export default function LearningPage() {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// Other people's handwriting: a downloaded dataset (GNHK, IAM...) is converted to line images and
+// mixed into training. The teacher's own corrected lines still decide whether a version is kept.
+function HandwritingDatasets({ chosen, onChoose, busy }) {
+  const queryClient = useQueryClient();
+  const { data } = useQuery({ queryKey: ["ocr-datasets"], queryFn: api.ocrDatasets });
+  const [form, setForm] = useState({ path: "", name: "gnhk" });
+  const [error, setError] = useState(null);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["ocr-datasets"] });
+  const job = useJob((j) => { if (j.status === "done") { setForm({ ...form, path: "" }); refresh(); } });
+  const remove = useMutation({ mutationFn: api.deleteOcrDataset, onSuccess: () => { onChoose(null); refresh(); } });
+  if (!data) return null;
+
+  const importIt = async (e) => {
+    e.preventDefault();
+    setError(null);
+    try { job.start((await api.importOcrDataset(form.path.trim(), form.name.trim())).job_id); }
+    catch (err) { setError(err.message); }
+  };
+
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3">
+      <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+        <Library size={13} /> Learn from a handwriting dataset
+      </div>
+      {data.datasets.length > 0 ? (
+        <ul className="mb-2 space-y-1.5 text-sm">
+          {data.datasets.map((d) => (
+            <li key={d.name} className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5">
+                <input type="checkbox" className="accent-brand-600" checked={chosen === d.name}
+                  onChange={(e) => onChoose(e.target.checked ? d.name : null)} disabled={busy} />
+                <span className="font-medium text-slate-800">{d.name}</span>
+              </label>
+              <span className="text-xs text-slate-500">
+                {d.lines.toLocaleString()} lines · {d.layout} · {formatBytes(d.bytes)}
+              </span>
+              <button className="text-xs text-rose-700 hover:underline" disabled={busy || remove.isPending}
+                onClick={() => remove.mutate(d.name)}>
+                delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mb-2 text-xs text-slate-600">
+          Download one yourself, then point at the folder or .zip. Recommended:{" "}
+          <a className="text-brand-700 hover:underline" target="_blank" rel="noreferrer"
+            href="https://www.kaggle.com/datasets/thejashwinima/gnhk-handwriting-dataset">GNHK</a>{" "}
+          (real handwritten notes, many writers). Understood layouts: GNHK pages, parquet tables, or images with a
+          labels file. Nothing is uploaded; it is only read from your disk, and you can delete it after training.
+        </p>
+      )}
+      <form className="flex flex-wrap gap-2" onSubmit={importIt}>
+        <input className="input w-auto flex-1 py-1.5" placeholder="F:\Downloads\gnhk_dataset" aria-label="Dataset folder or zip"
+          value={form.path} onChange={(e) => setForm({ ...form, path: e.target.value })} />
+        <input className="input w-28 py-1.5" aria-label="Name" value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <button className="btn-secondary py-1.5" disabled={!form.path.trim() || job.running}>Import</button>
+      </form>
+      <div className="mt-2"><JobBar {...job} /></div>
+      <ErrorNote>{error || remove.error?.message}</ErrorNote>
     </div>
   );
 }

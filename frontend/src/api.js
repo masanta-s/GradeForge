@@ -86,7 +86,12 @@ export const api = {
   disputes: (params) => request(`/disputes?${new URLSearchParams(params)}`),
 
   learning: () => request("/learning/status"),
-  trainTrocr: (writer) => request("/learning/trocr/train", { method: "POST", body: { writer } }),
+  trainTrocr: (writer, dataset = null, datasetLines = 2000) =>
+    request("/learning/trocr/train", { method: "POST", body: { writer, dataset, dataset_lines: datasetLines } }),
+  ocrDatasets: () => request("/learning/ocr/datasets"),
+  importOcrDataset: (path, name, limit = 5000) =>
+    request("/learning/ocr/datasets", { method: "POST", body: { path, name, limit } }),
+  deleteOcrDataset: (name) => request(`/learning/ocr/datasets/${name}`, { method: "DELETE" }),
   llmPlan: (model) => request(`/learning/llm/plan?${new URLSearchParams(model ? { model } : {})}`),
   progress: () => request("/learning/progress"),
   benchmark: (setups) => request("/learning/benchmark", { method: "POST", body: setups ? { setups } : {} }),

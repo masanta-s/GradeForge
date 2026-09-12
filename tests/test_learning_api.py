@@ -77,8 +77,9 @@ def test_trocr_training_job_logs_and_reports(api, monkeypatch, tmp_path):
                                                 image_path=str(image), ocr_text="x", corrected_text=f"line {i}")
     seen = {}
 
-    def fake_train(samples, progress):
+    def fake_train(samples, heldout=None, progress=None):
         seen["n"] = len(samples)
+        seen["heldout"] = len(heldout or [])
         progress(0.5, "training")
         return OCRTrainingResult("v1", "base", 0.23, 0.02, True, 19, 6, 20.0, "dir")
 

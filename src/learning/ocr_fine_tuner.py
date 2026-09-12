@@ -92,6 +92,7 @@ def _cer(extractor, samples: list[tuple[np.ndarray, str]]) -> float:
 def train_trocr_lora(
     samples: list[tuple[np.ndarray, str]],
     *,
+    heldout: list[tuple[np.ndarray, str]] | None = None,
     root: Path = config.TROCR_FINETUNED_DIR,
     base_dir: Path = config.TROCR_BASE_DIR,
     epochs: int = 12,
@@ -108,19 +109,24 @@ def train_trocr_lora(
 
     from src.ocr.text_extractor import TrOCRExtractor, _to_pil, load_trocr_processor
 
-    if len(samples) < MIN_SAMPLES:
-        raise ValueError(f"need at least {MIN_SAMPLES} corrected lines, have {len(samples)}")
+    if len(samples) + len(heldout or []) < MIN_SAMPLES:
+        raise ValueError(f"need at least {MIN_SAMPLES} lines to train on, have {len(samples)}")
     report = progress or (lambda p, m: None)
     started = time.time()
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
 
     rng = random.Random(seed)
-    order = list(range(len(samples)))
-    rng.shuffle(order)
-    n_held = max(min_heldout, round(len(samples) * heldout_fraction))
-    heldout = [samples[i] for i in order[:n_held]]
-    train = [samples[i] for i in order[n_held:]]
+    if heldout:
+        # Given explicitly when a public dataset is mixed in: accuracy is judged on the teacher's
+        # own students' lines, so extra data can never buy a promotion by itself.
+        train = list(samples)
+    else:
+        order = list(range(len(samples)))
+        rng.shuffle(order)
+        n_held = max(min_heldout, round(len(samples) * heldout_fraction))
+        heldout = [samples[i] for i in order[:n_held]]
+        train = [samples[i] for i in order[n_held:]]
 
     # Baseline: whatever is in use now (a previous fine-tune, or the base model).
     current = active_adapter(root)

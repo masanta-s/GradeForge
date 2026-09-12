@@ -20,7 +20,15 @@ router = APIRouter(prefix="/api/learning", tags=["learning"])
 
 
 class TrainIn(BaseModel):
-    writer: str | None = None  # one student's handwriting, or everyone's corrections
+    writer: str | None = None    # one student's handwriting, or everyone's corrections
+    dataset: str | None = None   # also learn from an imported handwriting dataset
+    dataset_lines: int = 2000    # how many of its lines to mix in
+
+
+class DatasetIn(BaseModel):
+    path: str
+    name: str = "handwriting"
+    limit: int = 5000
 
 
 class ExportIn(BaseModel):
@@ -128,8 +136,10 @@ def train_trocr(body: TrainIn, services: Services = Depends(get_services)) -> di
     from src.learning.ocr_fine_tuner import MIN_SAMPLES
 
     corrections = services.corrections.ocr_corrections(body.writer)
-    if len(corrections) < MIN_SAMPLES:
+    if not body.dataset and len(corrections) < MIN_SAMPLES:
         raise HTTPException(status_code=409, detail=f"need {MIN_SAMPLES} corrected lines, have {len(corrections)}")
+    if body.dataset and not any(d.name == body.dataset for d in ocr_datasets_list()):
+        raise HTTPException(status_code=404, detail=f"no imported dataset called {body.dataset!r}")
 
     def work(job):
         from src.learning.ocr_fine_tuner import train_trocr_lora
@@ -142,21 +152,76 @@ def train_trocr(body: TrainIn, services: Services = Depends(get_services)) -> di
                 OllamaModelProbe(timeout=10).unload(services.settings["model"])
         except Exception:
             pass  # Ollama not running: nothing to unload
+        from src.learning.ocr_dataset import load_samples
+
         samples = []
         for c in corrections:
             image = cv2.imdecode(np.fromfile(c.image_path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
             if image is not None:
                 samples.append((image, c.corrected_text))
-        result = train_trocr_lora(samples, progress=job.report)
+
+        heldout = None
+        if body.dataset:
+            # The teacher's own lines decide whether the result is better; the dataset only teaches.
+            job.report(0.02, f"Loading {body.dataset}")
+            extra = load_samples(body.dataset, body.dataset_lines)
+            if len(samples) >= 2 * MIN_SAMPLES:
+                keep = max(5, round(len(samples) * 0.25))
+                heldout, samples = samples[:keep], samples[keep:]
+            samples = samples + extra
+        result = train_trocr_lora(samples, heldout=heldout, progress=job.report)
+        note = f"writer: {body.writer or 'all'}; baseline {result.baseline}"
+        if body.dataset:
+            note += f"; + {body.dataset} dataset"
         services.corrections.log_training(
             mechanism="trocr_lora", model="trocr-base-handwritten", version=result.version, metric_name="cer",
             metric_before=result.baseline_cer, metric_after=result.tuned_cer, num_samples=len(samples),
-            promoted=result.promoted, notes=f"writer: {body.writer or 'all'}; baseline {result.baseline}")
+            promoted=result.promoted, notes=note)
         if result.promoted:
             services.reload_ocr()  # next OCR run loads the new adapter
         return to_jsonable(result)
 
     return job_response(services.jobs.submit("train_trocr", work))
+
+
+def ocr_datasets_list():
+    from src.learning.ocr_dataset import datasets
+
+    return datasets()
+
+
+@router.get("/ocr/datasets")
+def ocr_datasets() -> dict:
+    """Handwriting datasets the teacher has imported (deletable once training is done)."""
+    from src.learning.ocr_dataset import DATASETS_DIR
+
+    found = ocr_datasets_list()
+    return {"datasets": [d.to_dict() for d in found], "folder": str(DATASETS_DIR),
+            "total_lines": sum(d.lines for d in found)}
+
+
+@router.post("/ocr/datasets")
+def import_ocr_dataset(body: DatasetIn, services: Services = Depends(get_services)) -> dict:
+    """Convert a downloaded dataset (folder or .zip) into line images the reader can learn from."""
+    _gpu_busy(services)
+
+    def work(job):
+        from pathlib import Path as FsPath
+
+        from src.learning.ocr_dataset import prepare
+
+        return prepare(FsPath(body.path), body.name, limit=body.limit, progress=job.report).to_dict()
+
+    return job_response(services.jobs.submit("import_dataset", work))
+
+
+@router.delete("/ocr/datasets/{name}")
+def delete_ocr_dataset(name: str) -> dict:
+    from src.learning.ocr_dataset import delete
+
+    if not delete(name):
+        raise HTTPException(status_code=404, detail=f"no imported dataset called {name!r}")
+    return {"deleted": name}
 
 
 class ModelIn(BaseModel):

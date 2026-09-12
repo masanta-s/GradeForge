@@ -452,6 +452,8 @@ class ArchitectureGate:
 
 A small JSON file hosted on GitHub raw, fetched at startup, cached to SQLite. **Not a catalogue** — just a handful of entries to patch cases auto-resolution gets wrong (e.g., a model whose HF repo has an unusual name).
 
+> **As built (handwriting datasets):** mechanism 3 can train on an imported public dataset next to the teacher's corrected lines (GNHK word boxes regrouped into lines, HF parquet tables, or images + labels file). When both exist, 25% of the teacher's own lines become the held-out set, so extra data cannot buy a promotion; a dataset alone is allowed before 20 corrections exist, judged on its own split. Imported datasets live in `data/handwriting/<name>` and are deletable from the UI.
+
 > **As built (credentials):** every API key lives in one git-ignored `.env` at the project root (`.env.example` is committed with empty values), loaded by `src/config.py`; the OS credential store and `keyring` are not used, and GradeForge never writes a key.
 
 > **As built:** `registry/overrides.json` ships with the app and is refreshed from the repo at most once a day, **only when the teacher asks GradeForge to look up a model** (not at startup), so the app makes no network requests unless asked. It holds three kinds of patch: HF search terms and "QLoRA not advised" per family (Qwen 3.5), fixed repos per Ollama name (empty so far), and documented training VRAM per repo (the Unsloth figures above; other models get an estimate from their parameter count).

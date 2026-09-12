@@ -32,7 +32,7 @@ finalized key and three students (strong, weak, and one who skipped the diagram)
 |---|---|---|---|
 | 1 | Past corrections of similar answers are shown to the AI as examples | every model, cloud included | 1 correction |
 | 2 | Isotonic calibration of each model's bias against the teacher, per subject | every model | 15 corrections |
-| 3 | LoRA fine-tuning of TrOCR on corrected lines; used only if held-out error drops | the handwriting reader | 20 lines |
+| 3 | LoRA fine-tuning of TrOCR on corrected lines, optionally alongside an imported handwriting dataset; used only if held-out error drops | the handwriting reader | 20 lines (or a dataset) |
 | 4 | LoRA fine-tuning of the grading model: on this computer, streaming the model's layers through the GPU one at a time (private), or with a generated Colab/Kaggle notebook. The adapter is merged into the original weights and imported into Ollama; the new version is used only if it matches the teacher better on held-out answers | models the training router can place (Qwen 3.5 here; Gemma 4 via notebook) | 200 recommended |
 
 **Training on Kaggle without leaving GradeForge.** With `KAGGLE_API_TOKEN` in `.env`, the Learning
@@ -47,6 +47,23 @@ checkpointing re-runs a layer's forward during backward, which loads it again. O
 adapters learn. The gradients are identical to normal training (tested against a fully loaded model).
 Rounds are incremental (new answers + a replay of older ones), stop early when held-back validation
 answers stop improving, and can be paused and resumed.
+
+## Learning from other people's handwriting
+
+The handwriting reader can also train on a public dataset, so it improves before many students'
+scripts exist. Download one yourself and point GradeForge at the folder or zip
+(**Learning → card 3 → Import**); it is converted to line images and mixed into training:
+
+| Dataset | Why | Link |
+|---|---|---|
+| **GNHK** (recommended) | 515 pages of real handwritten notes by many writers, with line labels; closest to exam scripts | [Kaggle mirror](https://www.kaggle.com/datasets/thejashwinima/gnhk-handwriting-dataset), [official](https://www.goodnotes.com/gnhk) |
+| IAM (as line images) | The classic English benchmark, but `trocr-base-handwritten` is **already** trained on it, so gains are small | [Kaggle mirror](https://www.kaggle.com/datasets/dattrinh12/iam-handwriting-dataset) |
+
+Layouts understood: GNHK pages (`.json` word boxes with line numbers), HuggingFace `.parquet`
+tables, or images plus a labels file (`gt.txt`, `labels.csv`, …). Nothing is uploaded, and the
+dataset can be deleted afterwards: what is learned lives in the adapter. **The teacher's own
+corrected lines still decide** whether a new version is used, so a dataset can never make real
+accuracy worse.
 
 ## Is it improving?
 
