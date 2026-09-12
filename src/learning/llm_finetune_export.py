@@ -35,7 +35,10 @@ TARGETS = r".*language_model.*\.(q_proj|k_proj|v_proj|o_proj|in_proj_qkv|in_proj
 
 gpus = torch.cuda.device_count()
 assert gpus, "Turn on a GPU accelerator first (Kaggle: Settings -> Accelerator; Colab: Runtime -> Change runtime type)."
-dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16   # T4s have no bf16
+# T4s (Turing) report bf16 "supported" but only emulate it, which is slow: use fp16 there and
+# bf16 only on Ampere or newer (compute capability 8.0+).
+native_bf16 = min(torch.cuda.get_device_capability(i)[0] for i in range(gpus)) >= 8
+dtype = torch.bfloat16 if native_bf16 else torch.float16
 load = {"dtype": dtype}
 if SPLIT_ACROSS_GPUS and gpus > 1:
     # Kaggle's 2x T4 are separate 15 GB GPUs: put about half of the layers on each.

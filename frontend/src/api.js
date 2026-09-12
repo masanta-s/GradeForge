@@ -97,6 +97,9 @@ export const api = {
     request("/learning/llm/retrain", { method: "POST", body: { model, from_scratch: fromScratch } }),
   pauseTraining: () => request("/learning/llm/pause", { method: "POST" }),
   importAdapter: (model, path) => request("/learning/llm/import-adapter", { method: "POST", body: { model, path } }),
+  kaggleRun: () => request("/learning/llm/kaggle"),
+  startKaggle: (model) => request("/learning/llm/kaggle/start", { method: "POST", body: { model, consent: true } }),
+  importKaggle: () => request("/learning/llm/kaggle/import", { method: "POST" }),
   llmVersions: (model) => request(`/learning/llm/versions?${new URLSearchParams(model ? { model } : {})}`),
   exportNotebook: async (model) => {
     const response = await fetch("/api/learning/llm/export", {

@@ -35,6 +35,12 @@ finalized key and three students (strong, weak, and one who skipped the diagram)
 | 3 | LoRA fine-tuning of TrOCR on corrected lines; used only if held-out error drops | the handwriting reader | 20 lines |
 | 4 | LoRA fine-tuning of the grading model: on this computer, streaming the model's layers through the GPU one at a time (private), or with a generated Colab/Kaggle notebook. The adapter is merged into the original weights and imported into Ollama; the new version is used only if it matches the teacher better on held-out answers | models the training router can place (Qwen 3.5 here; Gemma 4 via notebook) | 200 recommended |
 
+**Training on Kaggle without leaving GradeForge.** With `KAGGLE_API_TOKEN` in `.env`, the Learning
+page pushes the notebook as a private Kaggle notebook, starts it on their two free T4s, shows its
+status and its own log lines (speed, GPU memory, validation loss), and brings the adapter back when
+it finishes. Merging, importing and the held-out comparison then run locally, exactly as for a
+local round. Without a token, the notebook can still be exported and run by hand.
+
 **Fine-tuning a 9B model on an 8 GB GPU.** The frozen weights stay on disk (memory-mapped). Each
 decoder layer is copied to the GPU just before it runs and dropped afterwards; per-layer gradient
 checkpointing re-runs a layer's forward during backward, which loads it again. Only the LoRA
@@ -101,6 +107,7 @@ is set (masked, e.g. `sk-…WXYZ`), and never writes a key anywhere.
 | HuggingFace source found | `qwen3.5:9b` → `Qwen/Qwen3.5-9B`, `gemma4:e4b` → `google/gemma-4-E4B-it` (parameter counts match Ollama's), ~1 s |
 | Training route on this laptop | Qwen 3.5 9B: LoRA needs ~22 GB → layers streamed through this GPU (or Kaggle 2x T4, split). Gemma 4 E4B: QLoRA ~10 GB → Colab/Kaggle |
 | Streaming a Qwen3.5-9B layer | RAM → GPU at 11.5 GiB/s: ~35 ms to load a layer vs ~380 ms to train it on a 4k-token chunk, so compute, not PCIe, sets the pace. Estimated ~20–35 min per 200 checked answers (not yet run at full size) |
+| Kaggle, via its API | pushing with `machine_shape: NvidiaTeslaT4` gives **two** T4s (14.6 GiB each), internet inside the notebook, 31 GiB RAM and ~1 TB scratch, so Qwen 3.5 9B's ~22 GB fits split across them. T4s report bf16 "supported" but only emulate it, so the notebook uses fp16 there |
 | Getting a fine-tune into Ollama | Ollama 0.34 applies LoRA adapters only to `llama`/`gemma2`, so adapters are merged first; Ollama's own converter imported and Q4-quantised a tiny model with Qwen3.5-9B's exact architecture in 7 s |
 
 These are synthetic test pages. Real handwriting will be harder, and that is the main thing

@@ -266,40 +266,96 @@ function LocalTraining({ model, weightsReady, canTrain, onChanged }) {
 }
 
 function CloudTraining({ model, target, canExport, weightsReady, showDownload, onChanged }) {
+  const queryClient = useQueryClient();
   const [consent, setConsent] = useState(false);
   const [path, setPath] = useState("");
   const [error, setError] = useState(null);
   const exportNotebook = useMutation({ mutationFn: () => api.exportNotebook(model) });
   const job = useJob((j) => j.status === "done" && onChanged());
-  const importAdapter = async (e) => {
-    e.preventDefault();
+  // While a Kaggle run is going, ask every 20 s: its status and the notebook's own log lines.
+  const kaggle = useQuery({
+    queryKey: ["kaggle-run"], queryFn: api.kaggleRun,
+    refetchInterval: (q) => (q.state.data?.run && !q.state.data.run.imported && !q.state.data.ready ? 20_000 : false),
+  });
+  const run = kaggle.data?.run;
+  const busy = job.running || (run && !run.imported && !kaggle.data?.ready);
+
+  const start = async (action) => {
     setError(null);
-    try { job.start((await api.importAdapter(model, path.trim())).job_id); } catch (err) { setError(err.message); }
+    try { job.start((await action()).job_id); } catch (err) { setError(err.message); }
+    queryClient.invalidateQueries({ queryKey: ["kaggle-run"] });
   };
+
   return (
     <div className="rounded-lg border border-slate-200 p-3">
       <div className="mb-1 flex items-center gap-2 text-sm font-medium text-slate-800"><CloudUpload size={15} /> {target.label}</div>
-      <p className="mb-2 text-xs text-slate-500">{target.reason}. The notebook trains the same adapter; you bring it back here.</p>
+      <p className="mb-2 text-xs text-slate-500">{target.reason}. The same adapter is trained there and brought back here.</p>
       <label className="flex items-start gap-2 text-xs text-slate-700">
         <input type="checkbox" className="mt-0.5 accent-brand-600" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-        I understand the notebook contains students' answers (no names) and will leave this computer.
+        I understand students' answers (no names) will be sent to {target.target === "kaggle" ? "Kaggle" : "Colab"}.
       </label>
-      <button className="btn-secondary mt-2 py-1.5" disabled={!consent || !canExport || exportNotebook.isPending}
-        onClick={() => exportNotebook.mutate()}>
-        <CloudUpload size={15} /> Export notebook
-      </button>
-      <form className="mt-3 space-y-2 border-t border-slate-100 pt-3" onSubmit={importAdapter}>
-        <div className="text-xs font-medium text-slate-700">Import the trained adapter (unzip gradeforge_adapter.zip first)</div>
-        {!weightsReady && (showDownload ? <WeightsDownload model={model} onDone={onChanged} />
-          : <p className="text-xs text-slate-500">Download the original weights above first: the adapter is merged into them here.</p>)}
-        <div className="flex flex-wrap gap-2">
-          <input className="input w-auto flex-1 py-1.5" placeholder="F:\Downloads\gradeforge_adapter" aria-label="Adapter folder"
-            value={path} onChange={(e) => setPath(e.target.value)} />
-          <button className="btn-primary py-1.5" disabled={!path.trim() || !weightsReady || job.running}>Import</button>
+
+      {kaggle.data?.configured ? (
+        <div className="mt-2 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn-primary py-1.5" disabled={!consent || !canExport || busy}
+              onClick={() => start(() => api.startKaggle(model))}>
+              <CloudUpload size={15} /> Train on Kaggle
+            </button>
+            {run && (
+              <>
+                <Badge tone={run.imported ? "green" : kaggle.data.ready ? "blue" : "amber"}>
+                  {run.imported ? "brought back" : run.status.toLowerCase()}
+                </Badge>
+                <a className="text-xs text-brand-700 hover:underline" href={run.url} target="_blank" rel="noreferrer">
+                  open on Kaggle
+                </a>
+                {kaggle.data.ready && !run.imported && (
+                  <button className="btn-primary py-1.5" disabled={!weightsReady || job.running}
+                    onClick={() => start(api.importKaggle)}>
+                    Bring the adapter back
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          {kaggle.data.log?.length > 0 && (
+            <pre className="max-h-32 overflow-y-auto rounded bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
+              {kaggle.data.log.join("\n")}
+            </pre>
+          )}
+          {run && !weightsReady && (
+            <p className="text-xs text-slate-500">
+              The adapter is merged into the original weights on this computer, so download them while Kaggle trains.
+            </p>
+          )}
+          <ErrorNote>{kaggle.data.error}</ErrorNote>
         </div>
-      </form>
+      ) : (
+        <p className="mt-2 text-xs text-slate-500">
+          Add <code>KAGGLE_API_TOKEN</code> to the <code>.env</code> file to let GradeForge run this for you, or
+          export the notebook and run it yourself.
+        </p>
+      )}
+
+      <div className="mt-3 border-t border-slate-100 pt-3">
+        <button className="btn-secondary py-1.5" disabled={!consent || !canExport || exportNotebook.isPending}
+          onClick={() => exportNotebook.mutate()}>
+          Export the notebook instead
+        </button>
+        <form className="mt-2 space-y-2" onSubmit={(e) => { e.preventDefault(); start(() => api.importAdapter(model, path.trim())); }}>
+          <div className="text-xs text-slate-600">Already trained it yourself? Import the unzipped adapter folder:</div>
+          {!weightsReady && (showDownload ? <WeightsDownload model={model} onDone={onChanged} />
+            : <p className="text-xs text-slate-500">Download the original weights above first: the adapter is merged into them here.</p>)}
+          <div className="flex flex-wrap gap-2">
+            <input className="input w-auto flex-1 py-1.5" placeholder="F:\Downloads\gradeforge_adapter" aria-label="Adapter folder"
+              value={path} onChange={(e) => setPath(e.target.value)} />
+            <button className="btn-secondary py-1.5" disabled={!path.trim() || !weightsReady || job.running}>Import</button>
+          </div>
+        </form>
+      </div>
       <div className="mt-2"><JobBar {...job} /></div>
-      {job.job?.status === "done" && <Verdict meta={job.job.result} />}
+      {job.job?.status === "done" && job.job.result?.verdict && <Verdict meta={job.job.result} />}
       <ErrorNote>{exportNotebook.error?.message || error}</ErrorNote>
     </div>
   );

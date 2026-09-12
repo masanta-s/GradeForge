@@ -257,6 +257,100 @@ def import_adapter(body: AdapterIn, services: Services = Depends(get_services)) 
     return job_response(services.jobs.submit("import_adapter", work))
 
 
+class KaggleStartIn(ModelIn):
+    consent: bool = False
+
+
+@router.get("/llm/kaggle")
+def kaggle_run(services: Services = Depends(get_services)) -> dict:
+    """The Kaggle account status and the current run, if any (polled by the Learning page)."""
+    from src.models.kaggle_auth import configured
+    from src.models.kaggle_runner import finished, load_run, poll, tail_log
+
+    run = load_run()
+    result = {"configured": configured(), "run": run.to_dict() if run else None, "log": []}
+    if run and not run.imported and result["configured"]:
+        try:
+            run = poll(run)
+            from src.models.kaggle_runner import save_run
+
+            save_run(run)
+            result["run"] = run.to_dict()
+            result["log"] = tail_log(run, config.CACHE_DIR / "kaggle" / "log")
+            result["ready"] = finished(run) and "COMPLETE" in run.status
+        except Exception as e:
+            result["error"] = str(e)[:200]
+    return result
+
+
+@router.post("/llm/kaggle/start")
+def kaggle_start(body: KaggleStartIn, services: Services = Depends(get_services)) -> dict:
+    """Send the notebook to Kaggle and start it on their GPUs (two T4s)."""
+    if not body.consent:
+        raise HTTPException(status_code=403, detail="training on Kaggle sends students' answers there: "
+                                                    "consent required")
+    from src.models.kaggle_auth import configured
+
+    if not configured():
+        raise HTTPException(status_code=409,
+                            detail="no Kaggle token: add KAGGLE_API_TOKEN to the .env file and restart")
+    _gpu_busy(services)
+    base = _base(services, body.model)
+
+    def work(job):
+        from datetime import datetime, timezone
+
+        from server.retrain import training_data
+        from src.learning.llm_finetune_export import build_notebook
+        from src.models.kaggle_runner import push, save_run
+
+        job.report(0.1, "Collecting your checked answers")
+        identity = services.models.probe.probe(base)
+        if services.models.resolution(base) is None:
+            services.models.resolve(base)
+        plan = services.models.training_plan(identity, services.grade_correction_count())
+        option = next((o for o in plan.options if o.target == "kaggle" and o.available), None) if plan else None
+        if option is None:
+            raise ValueError(plan.blocked_reason if plan else "no training plan for this model")
+        train, validation = training_data(services, since=None)
+        notebook = build_notebook(train, validation, base_model=plan.repo, ollama_base=base,
+                                  load_in_4bit=plan.estimate.method == "qlora",
+                                  split=plan.estimate.vram_gb > 15,
+                                  trained_until=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        job.report(0.6, "Sending the notebook to Kaggle")
+        run = push(notebook, model=base, examples=len(train), folder=config.CACHE_DIR / "kaggle" / "push")
+        save_run(run)
+        job.report(1.0, f"Running on Kaggle: {run.url}")
+        return run.to_dict()
+
+    return job_response(services.jobs.submit("kaggle_start", work))
+
+
+@router.post("/llm/kaggle/import")
+def kaggle_import(services: Services = Depends(get_services)) -> dict:
+    """Bring the finished run's adapter back: merge, import into Ollama, check, compare, promote."""
+    from src.models.kaggle_runner import finished, load_run
+
+    run = load_run()
+    if run is None:
+        raise HTTPException(status_code=409, detail="no Kaggle run to import")
+    if not finished(run) or "COMPLETE" not in run.status:
+        raise HTTPException(status_code=409, detail=f"the Kaggle run is {run.status.lower()}")
+    _gpu_busy(services)
+
+    def work(job):
+        from server.retrain import import_adapter
+        from src.models.kaggle_runner import fetch_adapter, save_run
+
+        adapter = fetch_adapter(run, config.CACHE_DIR / "kaggle" / "output", progress=job.report)
+        meta = import_adapter(services, job, base_model=run.model, adapter_dir=adapter)
+        run.imported = True
+        save_run(run)
+        return meta
+
+    return job_response(services.jobs.submit("import_adapter", work))
+
+
 @router.get("/llm/versions")
 def llm_versions(model: str | None = None, services: Services = Depends(get_services)) -> list[dict]:
     from server.retrain import versions
