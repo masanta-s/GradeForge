@@ -68,8 +68,21 @@ Each model gets a tier: 🟢 trainable (and where), 🟡 inference-only (few-sho
 learn), or 🔴 incompatible. A small [override registry](registry/overrides.json) patches the few
 things auto-resolution can't know, such as "don't QLoRA-train Qwen 3.5".
 
-Cloud models (OpenAI, Anthropic, Gemini) are optional: your own API key, kept in Windows Credential
-Manager; a cost estimate before use; and grading only switches to the cloud after an explicit consent tick.
+Cloud models (OpenAI, Anthropic, Gemini) are optional: your own API key, a cost estimate before use,
+and grading only switches to the cloud after an explicit consent tick.
+
+## Accounts and API keys
+
+Grading needs no account at all. The optional ones (Kaggle for cloud fine-tuning, HuggingFace for
+gated models, a cloud LLM provider) live in a single **`.env`** file in the project folder:
+
+```bash
+cp .env.example .env
+```
+
+Fill in what you use and restart GradeForge. `.env` is git-ignored; the committed `.env.example`
+lists the same variables with empty values. GradeForge only ever reads them, shows whether each one
+is set (masked, e.g. `sk-…WXYZ`), and never writes a key anywhere.
 
 ## Measured on this build (RTX 4060 Laptop, 8 GB)
 

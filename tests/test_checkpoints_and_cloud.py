@@ -10,7 +10,7 @@ from demo.samples import SAMPLE_KEY
 from src.models.checkpoint_gc import CheckpointGC
 from src.models.cloud_provider import CloudProvider, chat_models, estimate_cost, litellm_model
 from src.models.model_manager import import_gguf, modelfile_directives
-from src.models.secret_store import MAX_SECRET_CHARS, MemorySecretStore, SecretStore
+from src.models.secret_store import MemorySecretStore, SecretStore
 from tests.model_fakes import QWEN_MODELFILE, FakeProbe
 
 
@@ -134,17 +134,21 @@ def test_import_gguf_rejects_bad_input_and_cleans_up(tmp_path):
 
 # --- secrets --------------------------------------------------------------------------------
 
-def test_secret_store_masks_and_limits_keys():
-    store = SecretStore(service="gradeforge-test")   # the in-memory keyring from conftest
-    store.set("openai", "  sk-proj-abcdefghijklmnopWXYZ  ")
-    assert store.get("openai") == "sk-proj-abcdefghijklmnopWXYZ" and store.masked("openai") == "sk-…WXYZ"
-    with pytest.raises(ValueError, match="1280"):
-        store.set("openai", "x" * (MAX_SECRET_CHARS + 1))
-    with pytest.raises(ValueError):
-        store.set("openai", "   ")
-    store.delete("openai")
-    store.delete("openai")   # deleting twice is fine
-    assert store.get("openai") is None and store.masked("openai") is None
+def test_secrets_are_read_from_env_and_only_ever_masked(monkeypatch):
+    store = SecretStore()
+    assert store.get("openai") is None and store.source("openai") == "" and store.masked("openai") is None
+    monkeypatch.setenv("OPENAI_API_KEY", "  sk-proj-abcdefghijklmnopWXYZ  ")
+    assert store.get("openai") == "sk-proj-abcdefghijklmnopWXYZ"
+    # set in the shell rather than the file: the settings page says so instead of claiming .env
+    assert store.source("openai") == "OPENAI_API_KEY (environment)" and store.masked("openai") == "sk-…WXYZ"
+    from src import config
+
+    config.ENV_FILE_VARS.add("OPENAI_API_KEY")
+    assert store.status("openai") == {"name": "openai", "variable": "OPENAI_API_KEY", "set": True,
+                                      "masked": "sk-…WXYZ", "source": "OPENAI_API_KEY in .env"}
+    config.ENV_FILE_VARS.discard("OPENAI_API_KEY")
+    monkeypatch.setenv("OPENAI_API_KEY", "   ")          # an empty line in .env means "not set"
+    assert store.get("openai") is None
 
 
 # --- cloud provider -------------------------------------------------------------------------
@@ -194,7 +198,8 @@ def test_api_key_check_explains_failures():
         return object()
 
     secrets = MemorySecretStore()
-    assert not CloudProvider(secrets, completion=works).validate_api_key("openai", "gpt-4o-mini").ok
+    check = CloudProvider(secrets, completion=works).validate_api_key("openai", "gpt-4o-mini")
+    assert not check.ok and "OPENAI_API_KEY in the .env file" in check.detail
     secrets.set("openai", "sk-test-1234567890")
     assert "rejected" in CloudProvider(secrets, completion=rejects).validate_api_key("openai", "gpt-4o-mini").detail
     assert "not found" in CloudProvider(secrets, completion=not_found).validate_api_key("openai", "gpt-9").detail
@@ -205,10 +210,8 @@ def test_api_key_check_explains_failures():
 
 def test_provider_status_never_returns_the_key():
     secrets = MemorySecretStore()
-    provider = CloudProvider(secrets)
-    provider.save_key("anthropic", "sk-ant-api03-secretsecretABCD")
-    status = {p["id"]: p for p in provider.status()}
+    secrets.set("anthropic", "sk-ant-api03-secretsecretABCD")
+    status = {p["id"]: p for p in CloudProvider(secrets).status()}
     assert status["anthropic"]["has_key"] and status["anthropic"]["masked_key"] == "sk-…ABCD"
+    assert status["anthropic"]["variable"] == "ANTHROPIC_API_KEY"
     assert "secretsecret" not in json.dumps(status) and not status["openai"]["has_key"]
-    with pytest.raises(ValueError, match="unknown provider"):
-        provider.save_key("myspace", "k")

@@ -76,7 +76,7 @@ function ModelsSection({ ollama }) {
       </ul>
       <div className="space-y-4 border-t border-slate-100 p-5">
         <PullModel onDone={invalidate} />
-        <HfToken />
+        <Credentials />
       </div>
     </div>
   );
@@ -132,33 +132,63 @@ function PullModel({ onDone }) {
   );
 }
 
-function HfToken() {
-  const queryClient = useQueryClient();
-  const status = useQuery({ queryKey: ["hf-token"], queryFn: api.hfToken });
-  const [token, setToken] = useState("");
-  const done = () => { setToken(""); queryClient.invalidateQueries({ queryKey: ["hf-token"] }); };
-  const save = useMutation({ mutationFn: () => api.setHfToken(token), onSuccess: done });
-  const remove = useMutation({ mutationFn: api.deleteHfToken, onSuccess: done });
+// Credentials all come from the .env file in the project folder, so this is read-only: it shows
+// which are set (masked) and can prove the Kaggle one works.
+function Credentials() {
+  const { data } = useQuery({ queryKey: ["secrets"], queryFn: api.secrets });
+  const { data: kaggle } = useQuery({ queryKey: ["kaggle"], queryFn: api.kaggle });
+  const check = useMutation({ mutationFn: api.checkKaggle });
+  const quota = check.data;
+  if (!data) return null;
+
   return (
     <div>
-      <label className="label" htmlFor="hf-token"><KeyRound size={13} className="mr-1 inline" />HuggingFace token (optional)</label>
-      {status.data?.has_hf_token ? (
-        <div className="flex items-center gap-2 text-sm">
-          <Badge tone="green">saved in Windows Credential Manager</Badge>
-          <button className="btn-ghost py-1 text-rose-700" onClick={() => remove.mutate()}>Remove</button>
-        </div>
-      ) : (
-        <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-          <input id="hf-token" type="password" autoComplete="off" className="input w-auto flex-1" placeholder="hf_…"
-            value={token} onChange={(e) => setToken(e.target.value)} />
-          <button className="btn-secondary" disabled={!token.trim() || save.isPending}>Save</button>
-        </form>
+      <div className="label"><KeyRound size={13} className="mr-1 inline" />Accounts and API keys</div>
+      <p className="mb-2 text-sm text-slate-500">
+        All optional: grading needs no account. They are read from the <code>.env</code> file in the project
+        folder (copy <code>.env.example</code>, fill in what you use, restart GradeForge). GradeForge never
+        writes them anywhere.
+      </p>
+      <ul className="space-y-1.5 text-sm">
+        {data.map((s) => (
+          <li key={s.name} className="flex flex-wrap items-center gap-2">
+            <code className="w-52 shrink-0 text-xs text-slate-600">{s.variable}</code>
+            {s.set ? <Badge tone="green">set · {s.masked}</Badge> : <Badge>not set</Badge>}
+            <span className="text-xs text-slate-500">{LABELS[s.name]}</span>
+            {s.name === "kaggle" && s.set && (
+              <>
+                <button className="btn-secondary py-0.5 text-xs" disabled={check.isPending} onClick={() => check.mutate()}>
+                  {check.isPending ? "Checking…" : "Test connection"}
+                </button>
+                {quota && (
+                  <span className="text-xs text-slate-600">
+                    {quota.username}
+                    {quota.gpu_hours_left != null && ` · ${quota.gpu_hours_left} of ${quota.gpu_hours_total} GPU hours left this week`}
+                  </span>
+                )}
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+      {kaggle && !kaggle.has_token && (
+        <p className="mt-2 text-xs text-slate-500">
+          Kaggle token: kaggle.com → your avatar → Settings → API → Create New Token. Notebooks also need
+          Phone Verification on your Kaggle account.
+        </p>
       )}
-      <p className="mt-1.5 text-xs text-slate-500">Only needed for gated models or if HuggingFace rate-limits the look-ups.</p>
-      <ErrorNote>{save.error?.message || remove.error?.message}</ErrorNote>
+      <ErrorNote>{check.error?.message}</ErrorNote>
     </div>
   );
 }
+
+const LABELS = {
+  kaggle: "run the fine-tuning notebook on Kaggle's free GPUs",
+  huggingface: "gated models and higher download limits",
+  openai: "cloud grading with OpenAI",
+  anthropic: "cloud grading with Anthropic",
+  gemini: "cloud grading with Google Gemini",
+};
 
 function GeneralSettings({ settings }) {
   const queryClient = useQueryClient();

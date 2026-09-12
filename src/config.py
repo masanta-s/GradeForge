@@ -58,7 +58,24 @@ _CACHE_ENV = {
 }
 
 
+ENV_FILE = PROJECT_ROOT / ".env"
+ENV_FILE_VARS: set[str] = set()   # names that came from .env, so the UI can say where a key is from
+
+
+def _load_env_file() -> None:
+    """Secrets live in .env at the project root (git-ignored; see .env.example). Variables already
+    in the environment win, so a shell or CI can override the file."""
+    from dotenv import dotenv_values, load_dotenv
+
+    if not ENV_FILE.exists():
+        return
+    ENV_FILE_VARS.update(name for name, value in dotenv_values(ENV_FILE).items()
+                         if (value or "").strip() and name not in os.environ)
+    load_dotenv(ENV_FILE, override=False)
+
+
 def _apply_environment() -> None:
+    _load_env_file()
     for name, path in _CACHE_ENV.items():
         os.environ.setdefault(name, str(path))
 

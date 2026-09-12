@@ -121,33 +121,15 @@ def page_factory():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def real_keyring_is_never_touched():
-    """API keys live in Windows Credential Manager; tests get an in-memory keyring instead."""
-    import keyring
-    from keyring.backend import KeyringBackend
-    from keyring.errors import PasswordDeleteError
+def real_credentials_are_never_used():
+    """Credentials come from .env; tests must never pick up the teacher's real keys."""
+    import os
 
-    class MemoryKeyring(KeyringBackend):
-        priority = 1
+    from src.models.secret_store import ENV_NAMES
 
-        def __init__(self):
-            super().__init__()
-            self.values = {}
-
-        def get_password(self, service, username):
-            return self.values.get((service, username))
-
-        def set_password(self, service, username, password):
-            self.values[(service, username)] = password
-
-        def delete_password(self, service, username):
-            if self.values.pop((service, username), None) is None:
-                raise PasswordDeleteError(username)
-
-    previous = keyring.get_keyring()
-    keyring.set_keyring(MemoryKeyring())
+    saved = {v: os.environ.pop(v, None) for v in ENV_NAMES.values()}
     yield
-    keyring.set_keyring(previous)
+    os.environ.update({k: v for k, v in saved.items() if v is not None})
 
 
 @pytest.fixture(scope="session", autouse=True)

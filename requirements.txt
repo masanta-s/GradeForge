@@ -41,8 +41,11 @@ uvicorn[standard]==0.52.4
 python-multipart==0.0.32
 pydantic==2.13.5
 sqlalchemy==2.0.52
-keyring==25.7.0
+python-dotenv==1.2.3        # reads .env (API tokens)
 httpx==0.28.1
+
+# --- Cloud training (optional: push and run the fine-tuning notebook on Kaggle)
+kaggle==2.2.4
 
 # --- Dev
 pytest==9.1.1

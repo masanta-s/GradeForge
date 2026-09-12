@@ -23,3 +23,6 @@ frontend/dist/
 
 # Local tooling config
 .claude/
+
+# Secrets: the example is committed, the real file is not
+.env

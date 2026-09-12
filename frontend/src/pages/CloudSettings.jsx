@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Cloud, Eye, EyeOff, HardDrive, KeyRound, ShieldAlert } from "lucide-react";
+import { Cloud, HardDrive, KeyRound, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Badge, ErrorNote } from "../components";
 
-// Opt-in cloud grading. Keys go to Windows Credential Manager (never shown again, only masked);
+// Opt-in cloud grading. The API key comes from the project's .env file (shown masked only);
 // switching to cloud needs an explicit consent tick because exam data leaves the computer.
 export default function CloudSettings() {
   const queryClient = useQueryClient();
@@ -99,48 +99,31 @@ function Choice({ active, icon: Icon, title, onClick, children }) {
   );
 }
 
+// The key comes from .env; the app never stores one. This says whether it is there and tests it.
 function ApiKey({ provider, model }) {
-  const queryClient = useQueryClient();
-  const [key, setKey] = useState("");
-  const [show, setShow] = useState(false);
-  const [replacing, setReplacing] = useState(false);
-  const done = () => { setKey(""); setReplacing(false); queryClient.invalidateQueries({ queryKey: ["cloud"] }); };
-  const save = useMutation({ mutationFn: () => api.saveCloudKey(provider.id, key), onSuccess: done });
-  const remove = useMutation({ mutationFn: () => api.deleteCloudKey(provider.id), onSuccess: done });
   const test = useMutation({ mutationFn: () => api.testCloudKey(provider.id, model) });
   if (!provider) return null;
-
   return (
     <div>
-      <label className="label" htmlFor="api-key"><KeyRound size={13} className="mr-1 inline" />{provider.label} API key</label>
-      {provider.has_key && !replacing ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <code className="rounded bg-slate-100 px-2 py-1 text-sm">{provider.masked_key}</code>
-          <Badge tone="green">saved in Windows Credential Manager</Badge>
+      <div className="label"><KeyRound size={13} className="mr-1 inline" />{provider.label} API key</div>
+      {provider.has_key ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <code className="rounded bg-slate-100 px-2 py-1">{provider.masked_key}</code>
+          <Badge tone="green">from {provider.source}</Badge>
           <button className="btn-secondary py-1" disabled={!model || test.isPending} onClick={() => test.mutate()}>
             {test.isPending ? "Testing…" : "Test"}
           </button>
-          <button className="btn-ghost py-1" onClick={() => setReplacing(true)}>Replace</button>
-          <button className="btn-ghost py-1 text-rose-700" onClick={() => remove.mutate()}>Remove</button>
         </div>
       ) : (
-        <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-          <div className="relative min-w-0 flex-1">
-            <input id="api-key" className="input pr-10" type={show ? "text" : "password"} autoComplete="off"
-              value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste the key" />
-            <button type="button" className="absolute inset-y-0 right-2 text-slate-400" onClick={() => setShow(!show)}
-              aria-label={show ? "Hide key" : "Show key"}>
-              {show ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-          <button className="btn-primary" disabled={!key.trim() || save.isPending}>Save key</button>
-          {replacing && <button type="button" className="btn-ghost" onClick={() => setReplacing(false)}>Cancel</button>}
-        </form>
+        <p className="text-sm text-slate-600">
+          Put your key in <code>{provider.variable}</code> in the <code>.env</code> file in the project folder
+          (copy <code>.env.example</code>), then restart GradeForge.
+        </p>
       )}
       {test.data && (
         <p className={clsx("mt-2 text-sm", test.data.ok ? "text-emerald-700" : "text-rose-700")}>{test.data.detail}</p>
       )}
-      <div className="mt-2"><ErrorNote>{save.error?.message || remove.error?.message || test.error?.message}</ErrorNote></div>
+      <div className="mt-2"><ErrorNote>{test.error?.message}</ErrorNote></div>
     </div>
   );
 }

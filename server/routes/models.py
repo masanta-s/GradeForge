@@ -28,10 +28,6 @@ class ImportIn(BaseModel):
     base: str = config.SECONDARY_LLM
 
 
-class TokenIn(BaseModel):
-    token: str = Field(min_length=1)
-
-
 class CleanIn(BaseModel):
     keep: int = Field(default=2, ge=1, le=10)
 
@@ -155,32 +151,35 @@ def import_model(body: ImportIn, services: Services = Depends(get_services)) -> 
     return job_response(services.jobs.submit("import_model", work))
 
 
-@router.get("/models/hf-token")
-def has_hf_token(services: Services = Depends(get_services)) -> dict:
-    from src.models.model_manager import HF_TOKEN_NAME
+@router.get("/models/secrets")
+def secrets_status(services: Services = Depends(get_services)) -> list[dict]:
+    """Which credentials are set in .env. Never returns a key, only a masked hint."""
+    from src.models.secret_store import ENV_NAMES
 
-    return {"has_hf_token": services.secrets.get(HF_TOKEN_NAME) is not None}
+    return [services.secrets.status(name) for name in ENV_NAMES]
 
 
-@router.put("/models/hf-token")
-def set_hf_token(body: TokenIn, services: Services = Depends(get_services)) -> dict:
-    from src.models.model_manager import HF_TOKEN_NAME
+@router.get("/models/kaggle")
+def kaggle_status(services: Services = Depends(get_services)) -> dict:
+    """Whether a Kaggle token is set in .env. Never returns the token itself."""
+    from src.models.kaggle_auth import TOKEN_ENV, source
+
+    where = source()
+    return {"has_token": bool(where), "source": where, "variable": TOKEN_ENV}
+
+
+@router.post("/models/kaggle/check")
+def check_kaggle(services: Services = Depends(get_services)) -> dict:
+    """Ask Kaggle who the token belongs to and how much free GPU time is left this week."""
+    from src.models.kaggle_auth import KaggleNotConfigured, check
 
     try:
-        services.secrets.set(HF_TOKEN_NAME, body.token)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from None
-    services.models.token_changed()
-    return {"has_hf_token": True}
-
-
-@router.delete("/models/hf-token")
-def delete_hf_token(services: Services = Depends(get_services)) -> dict:
-    from src.models.model_manager import HF_TOKEN_NAME
-
-    services.secrets.delete(HF_TOKEN_NAME)
-    services.models.token_changed()
-    return {"has_hf_token": False}
+        return to_jsonable(check())
+    except KaggleNotConfigured as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    except Exception as e:
+        raise HTTPException(status_code=502,
+                            detail=f"Kaggle rejected the token or is unreachable: {str(e)[:200]}") from None
 
 
 # --- disk clean-up ------------------------------------------------------------------------

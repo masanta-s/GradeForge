@@ -101,14 +101,16 @@ def test_pull_measures_vram(api):
     assert api.app.state.services.models.probe.pulled == ["tiny:1b"]
 
 
-def test_hf_token_is_stored_as_a_secret(api):
-    services = api.app.state.services
-    assert api.get("/api/models/hf-token").json() == {"has_hf_token": False}
-    assert api.put("/api/models/hf-token", json={"token": "hf_abcdefghijklmnop"}).json() == {"has_hf_token": True}
-    assert services.secrets.get("huggingface") == "hf_abcdefghijklmnop"
-    assert api.get("/api/models/hf-token").json() == {"has_hf_token": True}
-    assert "hf_abc" not in json.dumps(services.settings)
-    assert api.delete("/api/models/hf-token").json() == {"has_hf_token": False}
+def test_credentials_are_reported_never_saved_by_the_app(api):
+    names = {s["name"]: s for s in api.get("/api/models/secrets").json()}
+    assert names["huggingface"]["variable"] == "HF_TOKEN" and not names["huggingface"]["set"]
+    assert set(names) == {"kaggle", "huggingface", "openai", "anthropic", "gemini"}
+
+    api.app.state.services.secrets.set("huggingface", "hf_abcdefghijklmnop")   # stands in for .env
+    updated = {s["name"]: s for s in api.get("/api/models/secrets").json()}
+    assert updated["huggingface"]["set"] and updated["huggingface"]["masked"] == "hf_…mnop"
+    assert "abcdefghijkl" not in api.get("/api/models/secrets").text           # only ever masked
+    assert api.put("/api/models/hf-token", json={"token": "x"}).status_code == 405   # no way to save one
 
 
 def test_storage_report_and_clean_up(api, tmp_path, monkeypatch):
@@ -139,20 +141,23 @@ def test_cloud_needs_a_key_and_consent(api):
     assert api.put("/api/cloud/settings", json=body).status_code == 403          # no consent
     assert api.put("/api/cloud/settings", json={**body, "consent": True}).status_code == 409  # no key
 
-    status = api.put("/api/cloud/key", json={"provider": "openai", "key": "sk-proj-0123456789abcdWXYZ"}).json()
+    services.secrets.set("openai", "sk-proj-0123456789abcdWXYZ")   # stands in for OPENAI_API_KEY in .env
+    status = api.get("/api/cloud").json()["providers"]
     openai = next(p for p in status if p["id"] == "openai")
     assert openai["masked_key"] == "sk-…WXYZ" and "0123456789" not in json.dumps(status)
+    assert openai["variable"] == "OPENAI_API_KEY"
 
     settings = api.put("/api/cloud/settings", json={**body, "consent": True}).json()
     assert settings["active"] and services.model_name == "gpt-4o-mini"
     assert api.get("/api/health").json()["provider"] == "cloud"
     services._llm = None
     client_llm = services.llm
-    assert (client_llm.provider, client_llm.model, client_llm.api_key) == ("cloud", "gpt-4o-mini", "sk-proj-0123456789abcdWXYZ")
+    assert (client_llm.provider, client_llm.model, client_llm.api_key) == ("cloud", "gpt-4o-mini",
+                                                                          "sk-proj-0123456789abcdWXYZ")
 
-    # deleting the key falls back to local grading
-    api.delete("/api/cloud/key/openai")
-    assert not services.cloud_active and services.model_name == "qwen3.5:9b"
+    # removing the key from .env falls back to local grading at the next switch
+    services.secrets.delete("openai")
+    assert api.put("/api/cloud/settings", json={**body, "consent": True}).status_code == 409
 
 
 def test_cloud_cost_estimate(api):

@@ -64,11 +64,6 @@ class ModelManager:
             self._resolver = HFSourceResolver(cache=self.cache, token=self.secrets.get(HF_TOKEN_NAME))
         return self._resolver
 
-    def token_changed(self) -> None:
-        """The HF token was saved or removed: the next resolution uses the new one."""
-        if self._own_resolver:
-            self._resolver = None
-
     # --- the chain, from caches ----------------------------------------------------------
     def report(self, name: str, digest: str | None = None) -> ProbeReport | None:
         return cached_report(name, digest, self.cache)

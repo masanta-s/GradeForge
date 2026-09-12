@@ -28,6 +28,9 @@ New-Item -ItemType Directory -Force -Path $env:HF_HOME | Out-Null
 # HF_HUB_OFFLINE is switched on by setup_env.py once models are downloaded.
 $env:LITELLM_LOCAL_MODEL_COST_MAP = "True"
 
+# API tokens (Kaggle, HuggingFace, cloud) are read from the .env file in this folder by
+# src/config.py, never from this script and never from the OS credential store. See .env.example.
+
 # Ollama stores models wherever its app is configured (Settings -> model location / OLLAMA_MODELS).
 
 # Portable Node 24 LTS for the frontend (tools\node), ahead of any system Node.

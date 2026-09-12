@@ -1,5 +1,5 @@
-"""Opt-in cloud models: API keys (OS credential store), key test, cost estimate, and switching
-grading to a cloud model, which requires the teacher's explicit consent."""
+"""Opt-in cloud models: key test, cost estimate, and switching grading to a cloud model, which
+requires the teacher's explicit consent. API keys are read from .env, never saved by the app."""
 from __future__ import annotations
 
 from typing import Literal
@@ -12,11 +12,6 @@ from server.serialize import to_jsonable
 from server.services import Services
 
 router = APIRouter(prefix="/api/cloud", tags=["cloud"])
-
-
-class KeyIn(BaseModel):
-    provider: str
-    key: str = Field(min_length=1)
 
 
 class TestIn(BaseModel):
@@ -58,24 +53,6 @@ def model_info(model: str) -> dict:
     return model_info(model)
 
 
-@router.put("/key")
-def save_key(body: KeyIn, services: Services = Depends(get_services)) -> list[dict]:
-    try:
-        services.cloud.save_key(body.provider, body.key)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from None
-    services.reset_llm()
-    return services.cloud.status()
-
-
-@router.delete("/key/{provider}")
-def delete_key(provider: str, services: Services = Depends(get_services)) -> list[dict]:
-    services.cloud.delete_key(provider)
-    if services.settings["cloud_provider"] == provider and services.settings["provider"] == "cloud":
-        services.update_settings({"provider": "ollama"})  # no key left: back to local grading
-    return services.cloud.status()
-
-
 @router.post("/test")
 def test_key(body: TestIn, services: Services = Depends(get_services)) -> dict:
     """One 5-token request with no student data, to check the key and model name."""
@@ -108,7 +85,8 @@ def save_settings(body: CloudSettingsIn, services: Services = Depends(get_servic
         if not body.cloud_model.strip():
             raise HTTPException(status_code=422, detail="choose a cloud model")
         if services.cloud.api_key(body.cloud_provider) is None:
-            raise HTTPException(status_code=409, detail="save an API key for this provider first")
+            variable = services.secrets.variable(body.cloud_provider)
+            raise HTTPException(status_code=409, detail=f"set {variable} in the .env file first")
     services.update_settings({"provider": body.provider, "cloud_provider": body.cloud_provider,
                               "cloud_model": body.cloud_model.strip(), "cloud_consent": body.consent})
     return _settings_view(services)

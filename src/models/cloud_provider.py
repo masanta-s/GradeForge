@@ -1,6 +1,7 @@
 """Opt-in cloud models: API keys, key checks and cost estimates.
 
-Keys are stored per provider in the OS credential store (see secret_store). Model names and
+Keys come from the .env file in the project folder (see secret_store), one variable per
+provider; GradeForge only reads them. Model names and
 prices come from LiteLLM's bundled price map (offline copy: LITELLM_LOCAL_MODEL_COST_MAP), so
 suggestions stay current with the installed LiteLLM and nothing is hard-coded here. Any other
 model name the provider accepts can still be typed in.
@@ -126,15 +127,8 @@ class CloudProvider:
 
     def status(self) -> list[dict]:
         return [{"id": pid, "label": label, "has_key": self.secrets.get(pid) is not None,
-                 "masked_key": self.secrets.masked(pid)} for pid, label in PROVIDERS.items()]
-
-    def save_key(self, provider: str, api_key: str) -> None:
-        if provider not in PROVIDERS:
-            raise ValueError(f"unknown provider {provider!r}")
-        self.secrets.set(provider, api_key)
-
-    def delete_key(self, provider: str) -> None:
-        self.secrets.delete(provider)
+                 "masked_key": self.secrets.masked(pid), "source": self.secrets.source(pid),
+                 "variable": self.secrets.variable(pid)} for pid, label in PROVIDERS.items()]
 
     def api_key(self, provider: str) -> str | None:
         return self.secrets.get(provider)
@@ -143,7 +137,7 @@ class CloudProvider:
         """One tiny request ("Reply with OK", 5 tokens). Sends no student data."""
         key = api_key or self.secrets.get(provider)
         if not key:
-            return KeyCheck(False, "no API key saved for this provider")
+            return KeyCheck(False, f"set {self.secrets.variable(provider)} in the .env file first")
         import litellm
 
         try:
